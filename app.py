@@ -3,6 +3,11 @@
 # =================================================================
 from flask import Flask, jsonify, render_template, abort, request, Response
 import json
+import os# =================================================================
+# 1. IMPORTAÇÕES
+# =================================================================
+from flask import Flask, jsonify, render_template, abort, request, Response, send_file
+import json
 import os
 import re
 import pandas as pd
@@ -27,6 +32,8 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # =================================================================
 # 3. FUNÇÕES AUXILIARES
 # =================================================================
+print("RODANDO ESTE APP:", __file__)
+
 def criar_backup():
     """
     Cria uma cópia de segurança do ficheiro de dados atual.
@@ -175,13 +182,17 @@ def salvar_no_banco_de_dados(dados_do_pedido):
 # 4. ROTAS DO SITE (ENDEREÇOS)
 # =================================================================
 @app.route("/")
-def pagina_inicial(): return render_template('conferencia.html')
+def pagina_inicial():
+    # return render_template('conferencia.html')  <-- Comentei esta linha com um #
+    return "<h1>A rota RAÍZ agora funciona também!</h1>" # <-- Adicionei esta linha para o teste
 
 @app.route("/conferencia")
 def pagina_conferencia(): return render_template('conferencia.html')
 
 @app.route("/gestao")
-def pagina_gestao(): return render_template('gestao.html')
+def pagina_gestao():
+    return render_template('gestao.html')
+
 
 @app.route('/conferencia/<nome_da_carga>')
 def pagina_lista_pedidos(nome_da_carga): return render_template('lista_pedidos.html', nome_da_carga=nome_da_carga)
@@ -361,6 +372,21 @@ def gerar_relatorio():
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Cortes')
     return Response(output.getvalue(), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment;filename=cortes_relatorio.xlsx"})
+
+
+# =================================================================
+# NOVA ROTA PARA DOWNLOAD DO BACKUP
+# =================================================================
+@app.route('/backups/<nome_backup>')
+def download_backup(nome_backup):
+    caminho = os.path.join(BACKUP_FOLDER, nome_backup)
+    if not os.path.exists(caminho):
+        return "Arquivo não encontrado", 404
+    return send_file(caminho, as_attachment=True)
+
+@app.route("/teste")
+def pagina_de_teste():
+    return "<h1>A rota de teste funcionou!</h1>"
 
 # =================================================================
 # RODA O APP
