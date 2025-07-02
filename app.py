@@ -270,8 +270,7 @@ init_db()
 # =================================================================
 @app.route("/")
 def pagina_inicial():
-    # return render_template('conferencia.html')  <-- Comentei esta linha com um #
-    return "<h1>A rota RAÍZ agora funciona também!</h1>" # <-- Adicionei esta linha para o teste
+    return render_template('conferencia.html') # <-- CÓDIGO CORRETO
 
 @app.route("/conferencia")
 def pagina_conferencia(): return render_template('conferencia.html')
