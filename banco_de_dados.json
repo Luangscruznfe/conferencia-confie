@@ -1,0 +1,406 @@
+[
+    {
+        "numero_pedido": "69094",
+        "nome_cliente": "SM 46",
+        "vendedor": "DAVID",
+        "produtos": [
+            {
+                "produto_nome": "BISC RENATA 115G WAFER BRIGADEIRO",
+                "quantidade_pedida": "1 CX C/ 40UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "95.60",
+                "unidades_pacote": 40
+            },
+            {
+                "produto_nome": "BISC RENATA 115G WAFER CHOCOLATE",
+                "quantidade_pedida": "1 CX C/ 40UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "95.60",
+                "unidades_pacote": 40
+            },
+            {
+                "produto_nome": "BISC RENATA 360G AGUA/SAL",
+                "quantidade_pedida": "1 CX C/ 20UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "80.00",
+                "unidades_pacote": 20
+            },
+            {
+                "produto_nome": "BISC RENATA 360G CREAM CRACKER",
+                "quantidade_pedida": "1 CX C/ 20UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "80.00",
+                "unidades_pacote": 20
+            },
+            {
+                "produto_nome": "BISC SALG TUCS 100G TRADICIONAL",
+                "quantidade_pedida": "1 CX C/ 30UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "40.50",
+                "unidades_pacote": 30
+            },
+            {
+                "produto_nome": "BR FRUIT 1L NECTAR ABACAXI BC",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "63.60",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "BR FRUIT 1L NECTAR LARANJA BC",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "63.60",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "BR FRUIT 1L NECTAR PESSEGO BC",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "63.60",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "BR FRUIT 1L NECTAR UVA BC",
+                "quantidade_pedida": "2 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "127.20",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "BR FRUIT 200ML NECTAR MARACUJA BC",
+                "quantidade_pedida": "1 CX C/ 27UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "53.50",
+                "unidades_pacote": 27
+            },
+            {
+                "produto_nome": "BR FRUIT 200ML NECTAR UVA BC",
+                "quantidade_pedida": "1 CX C/ 27UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "53.50",
+                "unidades_pacote": 27
+            },
+            {
+                "produto_nome": "CHICLE FREE GUM EXTRA FORTE 8G",
+                "quantidade_pedida": "1 DP C/ 15UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "14.25",
+                "unidades_pacote": 15
+            },
+            {
+                "produto_nome": "CHICLE FREE GUM MELANCIA 8G",
+                "quantidade_pedida": "1 DP C/ 15UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "14.25",
+                "unidades_pacote": 15
+            },
+            {
+                "produto_nome": "CHICLE FREE GUM MENTA 8G",
+                "quantidade_pedida": "1 DP C/ 15UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "14.25",
+                "unidades_pacote": 15
+            },
+            {
+                "produto_nome": "CHICLE FREE GUM MORANGO 8G",
+                "quantidade_pedida": "1 DP C/ 15UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "14.25",
+                "unidades_pacote": 15
+            },
+            {
+                "produto_nome": "CHICLE FREE GUM ORIGINAL CHERRY 8G",
+                "quantidade_pedida": "1 DP C/ 15UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "14.25",
+                "unidades_pacote": 15
+            },
+            {
+                "produto_nome": "CONSABOR DOCE BDJ COCADA BRANCA 160G",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "89.42",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "CONSABOR DOCE BDJ DE ABOBORA 200G",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "89.42",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "CONSABOR DOCE BDJ FONDANT DE LEITE 160G",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "89.42",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "CONSABOR DOCE BDJ PE DE MOCA 160G",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "89.42",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "CONSABOR PETIT FOUR MINI PALITO MIX 120G",
+                "quantidade_pedida": "2 CJ C/ 5UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "50.00",
+                "unidades_pacote": 5
+            },
+            {
+                "produto_nome": "DROPS FREEG CHOC MENTA 27.6G",
+                "quantidade_pedida": "2 DP C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "21.60",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "FARINHA DE TRIGO RENATA TIPO 1 1KG",
+                "quantidade_pedida": "2 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "123.00",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "GOMA GO JELLY 70G BEIJINHO MORANGO",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "33.48",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "GOMA GO JELLY 70G DENTADURA",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "33.48",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "GOMA GO JELLY 70G JURASSIC WORLD",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "33.48",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "GOMA GO JELLY 70G LULUCA",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "33.48",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "GOMA GO JELLY 70G MINIONS",
+                "quantidade_pedida": "1 CX C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "33.48",
+                "unidades_pacote": 12
+            },
+            {
+                "produto_nome": "MAC GALO VERM ESPAGUETE 8 500G",
+                "quantidade_pedida": "2 FD C/ 30UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "198.00",
+                "unidades_pacote": 30
+            },
+            {
+                "produto_nome": "MAC RENATA ALETRIA C/OVOS 500G",
+                "quantidade_pedida": "1 FD C/ 20UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "88.00",
+                "unidades_pacote": 20
+            },
+            {
+                "produto_nome": "MAC RENATA AVE MARIA C/OVOS 500G",
+                "quantidade_pedida": "1 FD C/ 20UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "69.00",
+                "unidades_pacote": 20
+            },
+            {
+                "produto_nome": "MAC RENATA PENA C/OVOS 500G",
+                "quantidade_pedida": "1 FD C/ 20UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "69.00",
+                "unidades_pacote": 20
+            },
+            {
+                "produto_nome": "MAC RENATA S/ GLUTEN PARAFUSO 500G",
+                "quantidade_pedida": "1 FD C/ 24UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "126.00",
+                "unidades_pacote": 24
+            },
+            {
+                "produto_nome": "MINI BOLO RENATA CHOC/BRIGADEIRO 40G",
+                "quantidade_pedida": "2 DP C/ 20UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "60.00",
+                "unidades_pacote": 20
+            },
+            {
+                "produto_nome": "PIPOCA CLAC CARAME 170G",
+                "quantidade_pedida": "6 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "390.00",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "PIRULITO SM POP TATOO UNICORNIO 120G",
+                "quantidade_pedida": "1 CX C/ 20UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "67.00",
+                "unidades_pacote": 20
+            },
+            {
+                "produto_nome": "SALG FOFURA 60G CEBOLA",
+                "quantidade_pedida": "3 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "59.70",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "SALG FOFURA 60G QUEIJO PALITO",
+                "quantidade_pedida": "2 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "39.80",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "SALG FOFURA JR 35G CEBOLA",
+                "quantidade_pedida": "3 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "45.00",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "SALG FOFURA JR 35G CHURRRASCO",
+                "quantidade_pedida": "2 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "30.00",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "TAMPICO 2L CITRICO",
+                "quantidade_pedida": "1 FD C/ 6UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "47.94",
+                "unidades_pacote": 6
+            }
+        ],
+        "status_conferencia": "Pendente",
+        "nome_da_carga": "TESTE",
+        "nome_arquivo": "12.pdf"
+    },
+    {
+        "numero_pedido": "68347",
+        "nome_cliente": "PRIMOS DOCES E SALG",
+        "vendedor": "MARCELO",
+        "produtos": [
+            {
+                "produto_nome": "SALG FOFURA 60G CEBOLA",
+                "quantidade_pedida": "1 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "21.72",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "SALG FOFURA 60G CHURRASCO",
+                "quantidade_pedida": "1 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "21.72",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "SALG FOFURA 60G PRESUNTO",
+                "quantidade_pedida": "1 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "21.72",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "SALG FOFURA 60G QUEIJO PALITO",
+                "quantidade_pedida": "1 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "21.72",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "SALG FOFURA 60G REQUEIJAO",
+                "quantidade_pedida": "1 FD C/ 10UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "21.72",
+                "unidades_pacote": 10
+            },
+            {
+                "produto_nome": "TAMPICO 2L CITRICO",
+                "quantidade_pedida": "3 FD C/ 6UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "152.01",
+                "unidades_pacote": 6
+            },
+            {
+                "produto_nome": "TAMPICO 450ML CITRICO",
+                "quantidade_pedida": "3 FD C/ 12UN",
+                "quantidade_entregue": null,
+                "status": "Pendente",
+                "valor_total_item": "119.46",
+                "unidades_pacote": 12
+            }
+        ],
+        "status_conferencia": "Pendente",
+        "nome_da_carga": "TESTE",
+        "nome_arquivo": "24.pdf"
+    }
+]
