@@ -159,20 +159,56 @@
     <div class="d-flex justify-content-start gap-2 mb-4">
         <a href="/api/gerar-relatorio" class="btn btn-success">Gerar Relatório Excel</a>
         <div class="dropdown">
-            <button class="btn btn-info dropdown-toggle" type="button" id="backupDropdown" data-bs-toggle="dropdown" aria-expanded="false">
-                Gerir Backups
-            </button>
-            <ul class="dropdown-menu" aria-labelledby="backupDropdown" id="backup-lista">
-               <li><a class="dropdown-item text-muted" href="#">A carregar...</a></li>
-            </ul>
-        </div>
-        <button class="btn btn-danger ms-auto" onclick="resetarDia()">Finalizar e Limpar Dia</button>
-    </div>
-
-    <div id="cortes-container">
-        <p class="text-center text-muted">A carregar cortes...</p>
-    </div>
+    <button class="btn btn-info dropdown-toggle" type="button" id="backupDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+        Gerir Backups
+    </button>
+    <ul class="dropdown-menu" aria-labelledby="backupDropdown" id="backup-lista">
+        <li><a class="dropdown-item text-muted" href="#">A carregar...</a></li>
+    </ul>
 </div>
+
+<script>
+function carregarBackups() {
+    const lista = document.getElementById('backup-lista');
+    lista.innerHTML = '<li><a class="dropdown-item text-muted" href="#">A carregar...</a></li>';
+    fetch('/api/backups-listar')
+        .then(response => response.json())
+        .then(backups => {
+            lista.innerHTML = '';
+            if (backups.length === 0) {
+                lista.innerHTML = '<li><a class="dropdown-item text-muted" href="#">Nenhum backup encontrado.</a></li>';
+                return;
+            }
+            backups.forEach(backup => {
+                const item = document.createElement('li');
+                item.innerHTML = `<a class="dropdown-item" href="#" onclick="restaurarBackup('${backup}')">${backup}</a>`;
+                lista.appendChild(item);
+            });
+        })
+        .catch(() => {
+            lista.innerHTML = '<li><a class="dropdown-item text-danger" href="#">Erro ao carregar backups.</a></li>';
+        });
+}
+
+function restaurarBackup(nomeBackup) {
+    if (confirm(`Tem certeza que deseja restaurar o backup '${nomeBackup}'? Os dados atuais serão substituídos.`)) {
+        fetch(`/api/restaurar-backup/${nomeBackup}`, { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                alert(data.mensagem || data.erro);
+                if (data.sucesso) {
+                    window.location.reload();
+                }
+            })
+            .catch(() => alert('Erro ao restaurar backup.'));
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    carregarBackups();
+});
+</script>
+
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>

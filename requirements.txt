@@ -3,3 +3,5 @@ gunicorn
 PyMuPDF
 pandas
 openpyxl
+psycopg2-binary
+cloudinary

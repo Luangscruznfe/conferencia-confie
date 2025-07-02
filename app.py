@@ -1,12 +1,10 @@
-# =================================================================
-# 1. IMPORTAÇÕES
-# =================================================================
-from flask import Flask, jsonify, render_template, abort, request, Response
-import json
-import os# =================================================================
 # 1. IMPORTAÇÕES
 # =================================================================
 from flask import Flask, jsonify, render_template, abort, request, Response, send_file
+import cloudinary
+import cloudinary.uploader
+import psycopg2
+import psycopg2.extras
 import json
 import os
 import re
@@ -33,6 +31,35 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # 3. FUNÇÕES AUXILIARES
 # =================================================================
 print("RODANDO ESTE APP:", __file__)
+
+def get_db_connection():
+    # A Render automaticamente coloca a URL na variável de ambiente
+    conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
+    return conn
+
+# Função para criar a tabela de pedidos
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # Crie a tabela se ela não existir
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS pedidos (
+            id SERIAL PRIMARY KEY,
+            numero_pedido TEXT UNIQUE NOT NULL,
+            nome_cliente TEXT,
+            vendedor TEXT,
+            nome_da_carga TEXT,
+            nome_arquivo TEXT,
+            status_conferencia TEXT,
+            produtos JSONB
+        );
+    ''')
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# Chame esta função uma vez no início do seu app para garantir que a tabela exista
+init_db()
 
 def criar_backup():
     """
@@ -168,15 +195,75 @@ def extrair_dados_do_pdf(caminho_do_pdf, nome_da_carga):
         return {"erro": f"Uma exceção crítica ocorreu: {str(e)}\n{traceback.format_exc()}"}
 
 def salvar_no_banco_de_dados(dados_do_pedido):
-    banco_de_dados = []
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, 'r', encoding='utf-8') as f:
-            try: banco_de_dados = json.load(f)
-            except json.JSONDecodeError: pass
-    banco_de_dados.append(dados_do_pedido)
-    with open(DB_FILE, 'w', encoding='utf-8') as f:
-        json.dump(banco_de_dados, f, indent=4, ensure_ascii=False)
-    criar_backup()
+    """Salva um novo pedido no banco de dados PostgreSQL."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # A instrução SQL para inserir um novo pedido.
+    # ON CONFLICT (numero_pedido) DO NOTHING evita erros se tentarmos inserir um pedido duplicado.
+    sql = """
+        INSERT INTO pedidos (
+            numero_pedido, nome_cliente, vendedor, nome_da_carga, 
+            nome_arquivo, status_conferencia, produtos, url_pdf
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (numero_pedido) DO NOTHING;
+    """
+
+    # Executa o comando, passando os dados de forma segura
+    cur.execute(sql, (
+        dados_do_pedido.get('numero_pedido'),
+        dados_do_pedido.get('nome_cliente'),
+        dados_do_pedido.get('vendedor'),
+        dados_do_pedido.get('nome_da_carga'),
+        dados_do_pedido.get('nome_arquivo'),
+        dados_do_pedido.get('status_conferencia', 'Pendente'),
+        json.dumps(dados_do_pedido.get('produtos', [])),  # Converte a lista de produtos para texto JSON
+        dados_do_pedido.get('url_pdf') # Será None por enquanto
+    ))
+
+    conn.commit() # Salva a transação
+    cur.close()
+    conn.close()
+
+    # Por enquanto, vamos desativar o backup antigo para não dar erro
+    # criar_backup()
+
+# =================================================================
+# FUNÇÕES DE BANCO DE DADOS POSTGRESQL
+# =================================================================
+def get_db_connection():
+    """Cria e retorna uma conexão com o banco de dados PostgreSQL."""
+    # A Render injeta a URL do banco de dados nesta variável de ambiente
+    database_url = os.environ.get('DATABASE_URL')
+    if database_url is None:
+        raise ValueError("A variável de ambiente DATABASE_URL não foi encontrada.")
+    conn = psycopg2.connect(database_url)
+    return conn
+
+def init_db():
+    """Garante que a tabela 'pedidos' exista no banco de dados."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS pedidos (
+            id SERIAL PRIMARY KEY,
+            numero_pedido TEXT UNIQUE NOT NULL,
+            nome_cliente TEXT,
+            vendedor TEXT,
+            nome_da_carga TEXT,
+            nome_arquivo TEXT,
+            status_conferencia TEXT,
+            produtos JSONB,
+            url_pdf TEXT
+        );
+    ''')
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# Roda a função para garantir que a tabela exista quando o app iniciar
+init_db()
 
 # =================================================================
 # 4. ROTAS DO SITE (ENDEREÇOS)
@@ -232,16 +319,13 @@ def api_cargas():
 
 @app.route('/api/pedidos/<nome_da_carga>')
 def api_pedidos_por_carga(nome_da_carga):
-    if not os.path.exists(DB_FILE): return jsonify([])
-    with open(DB_FILE, 'r', encoding='utf-8') as f:
-        try: pedidos = json.load(f)
-        except json.JSONDecodeError: return jsonify([])
-    pedidos_da_carga = [p for p in pedidos if p.get('nome_da_carga') == nome_da_carga]
-    def get_sort_key(item):
-        numeros = re.findall(r'(\d+)', item.get('nome_arquivo', ''))
-        return int(numeros[-1]) if numeros else 0
-    pedidos_da_carga.sort(key=get_sort_key, reverse=True)
-    return jsonify(pedidos_da_carga)
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) # Para retornar resultados como dicionários
+    cur.execute("SELECT * FROM pedidos WHERE nome_da_carga = %s;", (nome_da_carga,))
+    pedidos = cur.fetchall()
+    cur.close()
+    conn.close()
+    return jsonify(pedidos)
 
 @app.route('/api/item/update', methods=['POST'])
 def update_item_status():
