@@ -1,0 +1,369 @@
+# =================================================================
+# 1. IMPORTAÇÕES
+# =================================================================
+from flask import Flask, jsonify, render_template, abort, request, Response
+import json
+import os
+import re
+import pandas as pd
+import io
+import fitz  # PyMuPDF
+from werkzeug.utils import secure_filename
+from collections import defaultdict
+from datetime import datetime
+import shutil
+
+# =================================================================
+# 2. CONFIGURAÇÃO DA APP FLASK
+# =================================================================
+app = Flask(__name__)
+DB_FILE = "banco_de_dados.json"
+UPLOAD_FOLDER = 'uploads'
+BACKUP_FOLDER = 'backups'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(BACKUP_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# =================================================================
+# 3. FUNÇÕES AUXILIARES
+# =================================================================
+def criar_backup():
+    """
+    Cria uma cópia de segurança do ficheiro de dados atual.
+    """
+    if not os.path.exists(DB_FILE):
+        return
+    try:
+        if os.path.getsize(DB_FILE) > 0:
+            with open(DB_FILE, 'r', encoding='utf-8') as f:
+                banco_de_dados = json.load(f)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = os.path.join(BACKUP_FOLDER, f"backup_{timestamp}.json")
+            
+            with open(backup_path, 'w', encoding='utf-8') as f_bkp:
+                json.dump(banco_de_dados, f_bkp, indent=4, ensure_ascii=False)
+            
+            backups = sorted([f for f in os.listdir(BACKUP_FOLDER) if f.startswith("backup_") and f.endswith(".json")])
+            while len(backups) > 20:
+                os.remove(os.path.join(BACKUP_FOLDER, backups.pop(0)))
+    except (json.JSONDecodeError, FileNotFoundError):
+        return
+
+def extrair_dados_do_pdf(caminho_do_pdf, nome_da_carga):
+    """
+    Versão final com todas as correções de extração.
+    """
+    try:
+        documento = fitz.open(caminho_do_pdf)
+        produtos_finais = []
+        dados_cabecalho = {}
+
+        for i, pagina in enumerate(documento):
+            if i == 0:
+                def extrair_campo_regex(pattern, text):
+                    match = re.search(pattern, text, re.DOTALL)
+                    return match.group(1).replace('\n', ' ').strip() if match else "N/E"
+                texto_completo_pagina = pagina.get_text("text")
+                numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
+                if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
+                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
+                vendedor = "N/E"
+                try:
+                    vendedor_rect_list = pagina.search_for("Vendedor")
+                    if vendedor_rect_list:
+                        vendedor_rect = vendedor_rect_list[0]
+                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
+                        vendedor_words = pagina.get_text("words", clip=search_area)
+                        if vendedor_words: vendedor = vendedor_words[0][4]
+                except Exception:
+                    vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
+                dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
+
+            y_inicio, y_fim = 0, pagina.rect.height
+            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
+            if y_inicio_list: y_inicio = y_inicio_list[0].y1
+            else: y_inicio = 50 
+            y_fim_list = pagina.search_for("TOTAL GERAL")
+            if y_fim_list: y_fim = y_fim_list[0].y0
+            else:
+                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
+                if footer_list: y_fim = footer_list[0].y0 - 5
+            
+            if y_inicio >= y_fim and y_fim != pagina.rect.height: continue
+
+            X_COLUNA_PRODUTO_FIM, X_COLUNA_QUANTIDADE_FIM = 340, 450
+            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
+            if not palavras_na_tabela: continue
+            
+            palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
+            linhas_agrupadas = []
+            if palavras_na_tabela:
+                linha_atual = [palavras_na_tabela[0]]
+                y_referencia = palavras_na_tabela[0][1]
+                for j in range(1, len(palavras_na_tabela)):
+                    palavra = palavras_na_tabela[j]
+                    if abs(palavra[1] - y_referencia) < 5: linha_atual.append(palavra)
+                    else:
+                        linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+                        linha_atual = [palavra]
+                        y_referencia = palavra[1]
+                linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+
+            for palavras_linha in linhas_agrupadas:
+                product_chunks, current_chunk, start_index = [], [], 0
+                if palavras_linha:
+                    if len(palavras_linha) > 1 and palavras_linha[0][4].isdigit() and len(palavras_linha[0][4]) <= 2:
+                        current_chunk.append(palavras_linha[0])
+                        for k in range(1, len(palavras_linha)):
+                            word_info, word_text = palavras_linha[k], palavras_linha[k][4]
+                            is_start_of_new_product = False
+                            if word_text.isdigit() and len(word_text) <= 2 and k + 1 < len(palavras_linha) and palavras_linha[k+1][4].isdigit() and len(palavras_linha[k+1][4]) > 5:
+                                is_start_of_new_product = True
+                            if is_start_of_new_product:
+                                product_chunks.append(current_chunk)
+                                current_chunk = []
+                            current_chunk.append(word_info)
+                        product_chunks.append(current_chunk)
+                    else: product_chunks.append(palavras_linha)
+                
+                for chunk in product_chunks:
+                    nome_produto_parts, quantidade_parts, valores_parts = [], [], []
+                    for x0, y0, x1, y1, palavra, _, _, _ in chunk:
+                        if x0 < X_COLUNA_PRODUTO_FIM: nome_produto_parts.append(palavra)
+                        elif x0 < X_COLUNA_QUANTIDADE_FIM: quantidade_parts.append(palavra)
+                        else: valores_parts.append(palavra)
+                    
+                    if not nome_produto_parts: continue
+                    if len(nome_produto_parts) > 1 and nome_produto_parts[0].isdigit() and (len(nome_produto_parts[0]) <= 2 or nome_produto_parts[1].isdigit()):
+                        nome_produto_final = " ".join(nome_produto_parts[2:]) if len(nome_produto_parts) > 2 else " ".join(nome_produto_parts[1:])
+                    else: nome_produto_final = " ".join(nome_produto_parts)
+                    
+                    quantidade_completa_str = " ".join(quantidade_parts)
+                    valor_total_item = "0.00"
+                    if valores_parts:
+                        match_valor = re.search(r'[\d,.]+', valores_parts[-1])
+                        if match_valor: valor_total_item = match_valor.group(0)
+                    unidades_pacote = 1
+                    match_unidades = re.search(r'C/\s*(\d+)', quantidade_completa_str, re.IGNORECASE)
+                    if match_unidades: unidades_pacote = int(match_unidades.group(1))
+                    
+                    if nome_produto_final and quantidade_completa_str:
+                        # CORREÇÃO: Usando a chave 'produto_nome' para consistência
+                        produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_completa_str,"quantidade_entregue": None, "status": "Pendente","valor_total_item": valor_total_item.replace(',', '.'),"unidades_pacote": unidades_pacote})
+        
+        documento.close()
+        if not produtos_finais: return {"erro": "Nenhum produto pôde ser extraído do PDF."}
+        
+        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": os.path.basename(caminho_do_pdf)}
+    except Exception as e:
+        import traceback
+        return {"erro": f"Uma exceção crítica ocorreu: {str(e)}\n{traceback.format_exc()}"}
+
+def salvar_no_banco_de_dados(dados_do_pedido):
+    banco_de_dados = []
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, 'r', encoding='utf-8') as f:
+            try: banco_de_dados = json.load(f)
+            except json.JSONDecodeError: pass
+    banco_de_dados.append(dados_do_pedido)
+    with open(DB_FILE, 'w', encoding='utf-8') as f:
+        json.dump(banco_de_dados, f, indent=4, ensure_ascii=False)
+    criar_backup()
+
+# =================================================================
+# 4. ROTAS DO SITE (ENDEREÇOS)
+# =================================================================
+@app.route("/")
+def pagina_inicial(): return render_template('conferencia.html')
+
+@app.route("/conferencia")
+def pagina_conferencia(): return render_template('conferencia.html')
+
+@app.route("/gestao")
+def pagina_gestao(): return render_template('gestao.html')
+
+@app.route('/conferencia/<nome_da_carga>')
+def pagina_lista_pedidos(nome_da_carga): return render_template('lista_pedidos.html', nome_da_carga=nome_da_carga)
+
+@app.route("/pedido/<pedido_id>")
+def detalhe_pedido(pedido_id):
+    if not os.path.exists(DB_FILE): abort(404)
+    with open(DB_FILE, 'r', encoding='utf-8') as f: dados = json.load(f)
+    pedido_encontrado = next((p for p in reversed(dados) if p['numero_pedido'] == pedido_id), None)
+    if pedido_encontrado: return render_template('detalhe_pedido.html', pedido=pedido_encontrado)
+    return "Pedido não encontrado", 404
+
+@app.route('/api/upload/<nome_da_carga>', methods=['POST'])
+def upload_files(nome_da_carga):
+    if 'files[]' not in request.files: return jsonify({"sucesso": False, "erro": "Nenhum arquivo enviado."})
+    files = request.files.getlist('files[]')
+    erros, sucessos = [], 0
+    for file in files:
+        if file.filename != '':
+            filename = secure_filename(file.filename)
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(filepath)
+            dados = extrair_dados_do_pdf(filepath, nome_da_carga)
+            if "erro" in dados: erros.append(f"Arquivo '{filename}': {dados['erro']}")
+            else: salvar_no_banco_de_dados(dados); sucessos += 1
+    if erros: return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
+    return jsonify({"sucesso": True, "mensagem": f"Todos os {sucessos} arquivo(s) da carga '{nome_da_carga}' foram processados."})
+
+@app.route('/api/cargas')
+def api_cargas():
+    if not os.path.exists(DB_FILE): return jsonify([])
+    with open(DB_FILE, 'r', encoding='utf-8') as f:
+        try: pedidos = json.load(f)
+        except json.JSONDecodeError: return jsonify([])
+    cargas = sorted(list(set(p['nome_da_carga'] for p in pedidos if 'nome_da_carga' in p)))
+    return jsonify(cargas)
+
+@app.route('/api/pedidos/<nome_da_carga>')
+def api_pedidos_por_carga(nome_da_carga):
+    if not os.path.exists(DB_FILE): return jsonify([])
+    with open(DB_FILE, 'r', encoding='utf-8') as f:
+        try: pedidos = json.load(f)
+        except json.JSONDecodeError: return jsonify([])
+    pedidos_da_carga = [p for p in pedidos if p.get('nome_da_carga') == nome_da_carga]
+    def get_sort_key(item):
+        numeros = re.findall(r'(\d+)', item.get('nome_arquivo', ''))
+        return int(numeros[-1]) if numeros else 0
+    pedidos_da_carga.sort(key=get_sort_key, reverse=True)
+    return jsonify(pedidos_da_carga)
+
+@app.route('/api/item/update', methods=['POST'])
+def update_item_status():
+    dados_recebidos = request.json
+    if not os.path.exists(DB_FILE):
+        return jsonify({"sucesso": False, "erro": "Banco de dados não encontrado"})
+    
+    with open(DB_FILE, 'r+', encoding='utf-8') as f:
+        banco_de_dados = json.load(f)
+        status_final = "Erro"
+        
+        for pedido in banco_de_dados:
+            if pedido['numero_pedido'] == dados_recebidos['pedido_id']:
+                for produto in pedido['produtos']:
+                    # CORREÇÃO: Usando 'produto_nome' para a comparação
+                    if produto['produto_nome'] == dados_recebidos['produto_nome']:
+                        qtd_entregue_str = dados_recebidos['quantidade_entregue']
+                        observacao_texto = dados_recebidos.get('observacao', '')
+                        produto['quantidade_entregue'] = qtd_entregue_str
+                        produto['observacao'] = observacao_texto
+                        qtd_pedida_str = produto.get('quantidade_pedida', '0')
+                        unidades_pacote = int(produto.get('unidades_pacote', 1))
+                        match_pacotes = re.match(r'(\d+)', qtd_pedida_str)
+                        pacotes_pedidos = int(match_pacotes.group(1)) if match_pacotes else 0
+                        total_unidades_pedidas = pacotes_pedidos * unidades_pacote
+                        try:
+                            qtd_entregue_int = int(qtd_entregue_str)
+                            if qtd_entregue_int == total_unidades_pedidas: status_final = "Confirmado"
+                            elif qtd_entregue_int == 0: status_final = "Corte Total"
+                            else: status_final = "Corte Parcial"
+                        except (ValueError, TypeError): status_final = "Corte Parcial"
+                        produto['status'] = status_final
+                        break
+                todos_conferidos = all(p['status'] != 'Pendente' for p in pedido['produtos'])
+                if todos_conferidos: pedido['status_conferencia'] = 'Finalizado'
+                break
+        f.seek(0)
+        json.dump(banco_de_dados, f, indent=4, ensure_ascii=False)
+        f.truncate()
+    criar_backup()
+    return jsonify({"sucesso": True, "status_final": status_final})
+
+@app.route('/api/cortes')
+def api_cortes():
+    if not os.path.exists(DB_FILE): return jsonify({})
+    with open(DB_FILE, 'r', encoding='utf-8') as f:
+        try: pedidos = json.load(f)
+        except json.JSONDecodeError: return jsonify({})
+    cortes_agrupados = defaultdict(list)
+    for pedido in pedidos:
+        nome_carga = pedido.get('nome_da_carga', 'Sem Carga')
+        for produto in pedido['produtos']:
+            if produto['status'] in ['Corte Parcial', 'Corte Total']:
+                if nome_carga not in cortes_agrupados: cortes_agrupados[nome_carga] = []
+                # CORREÇÃO: Passando o objeto produto inteiro que agora contém 'produto_nome'
+                item = {"numero_pedido": pedido['numero_pedido'], "nome_cliente": pedido['nome_cliente'], "vendedor": pedido['vendedor'], "observacao": produto.get('observacao', ''),
+                        "produto": produto}
+                cortes_agrupados[nome_carga].append(item)
+    return jsonify(cortes_agrupados)
+
+@app.route('/api/backups-listar')
+def listar_backups():
+    arquivos = sorted([f for f in os.listdir(BACKUP_FOLDER) if f.endswith('.json')], reverse=True)
+    return jsonify(arquivos)
+
+@app.route('/api/restaurar-backup/<nome_backup>', methods=['POST'])
+def restaurar_backup(nome_backup):
+    caminho_backup = os.path.join(BACKUP_FOLDER, nome_backup)
+    if not os.path.exists(caminho_backup):
+        return jsonify({"sucesso": False, "erro": "Backup não encontrado."}), 404
+    try:
+        shutil.copyfile(caminho_backup, DB_FILE)
+        return jsonify({"sucesso": True, "mensagem": f"Backup '{nome_backup}' restaurado com sucesso."})
+    except Exception as e:
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
+
+@app.route('/api/resetar-dia', methods=['POST'])
+def resetar_dia():
+    try:
+        criar_backup()
+        if os.path.exists(DB_FILE): os.remove(DB_FILE)
+        for filename in os.listdir(app.config['UPLOAD_FOLDER']):
+            os.remove(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        return jsonify({"sucesso": True, "mensagem": "Sistema limpo para o próximo dia. Um backup final foi criado."})
+    except Exception as e:
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
+
+@app.route('/api/gerar-relatorio')
+def gerar_relatorio():
+    if not os.path.exists(DB_FILE): return "Banco de dados não encontrado.", 404
+    with open(DB_FILE, 'r', encoding='utf-8') as f:
+        try: pedidos = json.load(f)
+        except json.JSONDecodeError: return "Banco de dados vazio ou corrompido.", 404
+    dados_para_excel = []
+    for pedido in pedidos:
+        for produto in pedido['produtos']:
+            if produto['status'] in ['Corte Parcial', 'Corte Total']:
+                try:
+                    valor_total = float(produto['valor_total_item'])
+                    unidades_pacote = int(produto['unidades_pacote'])
+                    match = re.match(r'(\d+)', produto['quantidade_pedida'])
+                    pacotes_pedidos = int(match.group(1)) if match else 0
+                    preco_por_pacote = valor_total / pacotes_pedidos if pacotes_pedidos > 0 else 0
+                    preco_unidade = preco_por_pacote / unidades_pacote if unidades_pacote > 0 else 0
+                    unidades_pedidas = pacotes_pedidos * unidades_pacote
+                    unidades_entregues = int(produto.get('quantidade_entregue')) if produto.get('quantidade_entregue') is not None else 0
+                    valor_corte = (unidades_pedidas - unidades_entregues) * preco_unidade
+                    
+                    dados_para_excel.append({
+                        'Pedido': pedido['numero_pedido'],
+                        'Cliente': pedido['nome_cliente'],
+                        'Vendedor': pedido['vendedor'],
+                        # CORREÇÃO: Usando 'produto_nome' para consistência
+                        'Produto': produto.get('produto_nome', ''),
+                        'Quantidade Pedida': produto['quantidade_pedida'],
+                        'Quantidade Entregue': produto.get('quantidade_entregue', ''),
+                        'Status': produto['status'],
+                        'Observação': produto.get('observacao', ''),
+                        'Valor Total Item': produto['valor_total_item'],
+                        'Valor do Corte Estimado': round(valor_corte, 2)
+                    })
+                except (ValueError, TypeError, AttributeError) as e:
+                    print(f"Erro ao calcular corte para o produto {produto.get('produto_nome', 'N/A')}: {e}")
+                    continue
+    if not dados_para_excel: return "Nenhum item com corte encontrado para gerar o relatório."
+    df = pd.DataFrame(dados_para_excel)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Cortes')
+    return Response(output.getvalue(), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment;filename=cortes_relatorio.xlsx"})
+
+# =================================================================
+# RODA O APP
+# =================================================================
+if __name__ == "__main__":
+    app.run(debug=True, host='0.0.0.0', port=5000)
