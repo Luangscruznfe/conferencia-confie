@@ -376,7 +376,7 @@ def upload_files(nome_da_carga):
 
 @app.route('/api/cargas')
 def api_cargas():
--    conn = get_db_connection()
+    conn = get_db_connection()
     cur = conn.cursor()
     # Busca todos os nomes de carga únicos na tabela de pedidos
     cur.execute("SELECT DISTINCT nome_da_carga FROM pedidos ORDER BY nome_da_carga;")
