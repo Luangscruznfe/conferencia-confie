@@ -467,10 +467,6 @@ def download_backup(nome_backup):
         return "Arquivo não encontrado", 404
     return send_file(caminho, as_attachment=True)
 
-@app.route("/teste")
-def pagina_de_teste():
-    return "<h1>A rota de teste funcionou!</h1>"
-
 # =================================================================
 # RODA O APP
 # =================================================================
