@@ -309,11 +309,15 @@ def upload_files(nome_da_carga):
 
 @app.route('/api/cargas')
 def api_cargas():
-    if not os.path.exists(DB_FILE): return jsonify([])
-    with open(DB_FILE, 'r', encoding='utf-8') as f:
-        try: pedidos = json.load(f)
-        except json.JSONDecodeError: return jsonify([])
-    cargas = sorted(list(set(p['nome_da_carga'] for p in pedidos if 'nome_da_carga' in p)))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # Busca todos os nomes de carga únicos na tabela de pedidos
+    cur.execute("SELECT DISTINCT nome_da_carga FROM pedidos ORDER BY nome_da_carga;")
+    # O resultado vem como uma lista de tuplas, ex: [('Carga1',), ('Carga2',)]
+    # Precisamos extrair o primeiro item de cada tupla.
+    cargas = [row[0] for row in cur.fetchall()]
+    cur.close()
+    conn.close()
     return jsonify(cargas)
 
 @app.route('/api/pedidos/<nome_da_carga>')
