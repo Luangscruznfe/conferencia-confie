@@ -317,50 +317,48 @@ def detalhe_pedido(pedido_id):
 def upload_files(nome_da_carga):
     if 'files[]' not in request.files:
         return jsonify({"sucesso": False, "erro": "Nenhum arquivo enviado."}), 400
-
+    
     files = request.files.getlist('files[]')
     erros, sucessos = [], 0
-
+    
     for file in files:
         if file.filename == '':
             continue
 
         filename = secure_filename(file.filename)
-
+        
         try:
-            # 1. Envia o arquivo para o Cloudinary
-            print(f"Fazendo upload do arquivo '{filename}' para o Cloudinary...")
-            upload_result = cloudinary.uploader.upload(
-                file,
-                resource_type="raw", # Importante para arquivos que não são imagens
-                public_id=f"pedidos/{filename}" # Salva numa pasta "pedidos"
-            )
-            pdf_url = upload_result['secure_url']
-            print(f"Upload concluído. URL: {pdf_url}")
+            # 1. Lê o conteúdo do arquivo em memória uma única vez
+            print(f"Lendo o arquivo '{filename}' em memória...")
+            pdf_bytes = file.read()
 
-            # 2. Baixa o conteúdo do PDF em memória a partir da URL
-            import requests
-            print(f"Baixando conteúdo do PDF da URL...")
-            response = requests.get(pdf_url)
-            response.raise_for_status()  # Lança um erro se o download falhar
-            pdf_bytes = response.content
-            print("Download do conteúdo concluído.")
-
-            # 3. Extrai os dados passando o conteúdo em memória (stream)
+            # 2. Extrai os dados usando o conteúdo em memória (stream)
             print("Extraindo dados do PDF...")
             dados_extraidos = extrair_dados_do_pdf(
                 nome_da_carga=nome_da_carga, 
                 stream=pdf_bytes
             )
-
+            
             if "erro" in dados_extraidos:
                 erros.append(f"Arquivo '{filename}': {dados_extraidos['erro']}")
                 continue
-
+            
             print("Extração de dados concluída.")
 
-            # 4. Adiciona a URL do PDF e salva no banco de dados PostgreSQL
+            # 3. Envia o conteúdo já lido para o Cloudinary
+            print(f"Fazendo upload do arquivo '{filename}' para o Cloudinary...")
+            upload_result = cloudinary.uploader.upload(
+                pdf_bytes,  # Envia os bytes que já lemos
+                resource_type="raw",
+                public_id=f"pedidos/{filename}"
+            )
+            pdf_url = upload_result['secure_url']
+            print(f"Upload concluído. URL: {pdf_url}")
+
+            # 4. Adiciona a URL do PDF e salva no banco de dados
             dados_extraidos['url_pdf'] = pdf_url
+            # Adiciona o nome do arquivo original para referência
+            dados_extraidos['nome_arquivo'] = filename
             salvar_no_banco_de_dados(dados_extraidos)
             sucessos += 1
             print(f"Dados do arquivo '{filename}' salvos no banco de dados.")
@@ -373,12 +371,12 @@ def upload_files(nome_da_carga):
 
     if erros:
         return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
-
+    
     return jsonify({"sucesso": True, "mensagem": f"Todos os {sucessos} arquivo(s) da carga '{nome_da_carga}' foram processados."})
 
 @app.route('/api/cargas')
 def api_cargas():
-    conn = get_db_connection()
+-    conn = get_db_connection()
     cur = conn.cursor()
     # Busca todos os nomes de carga únicos na tabela de pedidos
     cur.execute("SELECT DISTINCT nome_da_carga FROM pedidos ORDER BY nome_da_carga;")
