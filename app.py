@@ -17,6 +17,17 @@ from datetime import datetime
 import shutil
 
 # =================================================================
+# CONFIGURAÇÃO DO CLOUDINARY
+# =================================================================
+cloudinary.config(
+    cloud_name="dse1cruh5",
+    api_key="513345832743713",
+    api_secret="1bELqY5yvRXc6qyRqLn8jpGc228",
+    secure=True
+)
+
+
+# =================================================================
 # 2. CONFIGURAÇÃO DA APP FLASK
 # =================================================================
 app = Flask(__name__)
