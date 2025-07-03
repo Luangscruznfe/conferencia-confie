@@ -53,15 +53,12 @@ def init_db():
             nome_arquivo TEXT,
             status_conferencia TEXT,
             produtos JSONB,
-            url_pdf TEXT  # <--- ✅ ESTA É A LINHA QUE ESTÁ FALTANDO NO SEU CÓDIGO
+            url_pdf TEXT
         );
     ''')
     conn.commit()
     cur.close()
     conn.close()
-
-# Chame esta função uma vez no início do seu app para garantir que a tabela exista
-init_db()
 
 def criar_backup():
     """
