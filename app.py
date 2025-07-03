@@ -285,10 +285,20 @@ def pagina_lista_pedidos(nome_da_carga): return render_template('lista_pedidos.h
 
 @app.route("/pedido/<pedido_id>")
 def detalhe_pedido(pedido_id):
-    if not os.path.exists(DB_FILE): abort(404)
-    with open(DB_FILE, 'r', encoding='utf-8') as f: dados = json.load(f)
-    pedido_encontrado = next((p for p in reversed(dados) if p['numero_pedido'] == pedido_id), None)
-    if pedido_encontrado: return render_template('detalhe_pedido.html', pedido=pedido_encontrado)
+    conn = get_db_connection()
+    # Usamos RealDictCursor para que o resultado venha como um dicionário
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Busca um único pedido no banco de dados pelo número
+    cur.execute("SELECT * FROM pedidos WHERE numero_pedido = %s;", (pedido_id,))
+    pedido_encontrado = cur.fetchone() # Pega apenas o primeiro resultado
+
+    cur.close()
+    conn.close()
+
+    if pedido_encontrado:
+        return render_template('detalhe_pedido.html', pedido=pedido_encontrado)
+
     return "Pedido não encontrado", 404
 
 @app.route('/api/upload/<nome_da_carga>', methods=['POST'])
