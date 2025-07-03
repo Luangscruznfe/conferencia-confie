@@ -39,6 +39,7 @@ def get_db_connection():
 
 # Função para criar a tabela de pedidos
 def init_db():
+    """Garante que a tabela 'pedidos' exista no banco de dados com TODAS as colunas."""
     conn = get_db_connection()
     cur = conn.cursor()
     # Crie a tabela se ela não existir
@@ -51,7 +52,8 @@ def init_db():
             nome_da_carga TEXT,
             nome_arquivo TEXT,
             status_conferencia TEXT,
-            produtos JSONB
+            produtos JSONB,
+            url_pdf TEXT  # <--- ✅ ESTA É A LINHA QUE ESTÁ FALTANDO NO SEU CÓDIGO
         );
     ''')
     conn.commit()
