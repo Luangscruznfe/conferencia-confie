@@ -270,7 +270,7 @@ init_db()
 # =================================================================
 @app.route("/")
 def pagina_inicial():
-    return render_template('conferencia.html') # <-- CÓDIGO CORRETO
+    return render_template('conferencia.html') # <--- CÓDIGO CORRETO
 
 @app.route("/conferencia")
 def pagina_conferencia(): return render_template('conferencia.html')
