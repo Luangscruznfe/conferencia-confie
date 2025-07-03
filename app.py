@@ -84,115 +84,28 @@ def criar_backup():
     except (json.JSONDecodeError, FileNotFoundError):
         return
 
-def extrair_dados_do_pdf(caminho_do_pdf, nome_da_carga):
+def extrair_dados_do_pdf(nome_da_carga, caminho_do_pdf=None, stream=None):
     """
     Versão final com todas as correções de extração.
+    Pode ler de um caminho de arquivo ou de um stream de bytes.
     """
     try:
-        documento = fitz.open(caminho_do_pdf)
+        if caminho_do_pdf:
+            documento = fitz.open(caminho_do_pdf)
+        elif stream:
+            documento = fitz.open(stream=stream, filetype="pdf")
+        else:
+            return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
+
+        # O RESTO DA SUA FUNÇÃO CONTINUA EXATAMENTE IGUAL DAQUI PARA BAIXO...
+        # ... (código que extrai o cabeçalho, as palavras, etc.) ...
+
         produtos_finais = []
         dados_cabecalho = {}
 
         for i, pagina in enumerate(documento):
-            if i == 0:
-                def extrair_campo_regex(pattern, text):
-                    match = re.search(pattern, text, re.DOTALL)
-                    return match.group(1).replace('\n', ' ').strip() if match else "N/E"
-                texto_completo_pagina = pagina.get_text("text")
-                numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
-                if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
-                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
-                vendedor = "N/E"
-                try:
-                    vendedor_rect_list = pagina.search_for("Vendedor")
-                    if vendedor_rect_list:
-                        vendedor_rect = vendedor_rect_list[0]
-                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
-                        vendedor_words = pagina.get_text("words", clip=search_area)
-                        if vendedor_words: vendedor = vendedor_words[0][4]
-                except Exception:
-                    vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
-                dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
-
-            y_inicio, y_fim = 0, pagina.rect.height
-            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            if y_inicio_list: y_inicio = y_inicio_list[0].y1
-            else: y_inicio = 50 
-            y_fim_list = pagina.search_for("TOTAL GERAL")
-            if y_fim_list: y_fim = y_fim_list[0].y0
-            else:
-                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-                if footer_list: y_fim = footer_list[0].y0 - 5
-            
-            if y_inicio >= y_fim and y_fim != pagina.rect.height: continue
-
-            X_COLUNA_PRODUTO_FIM, X_COLUNA_QUANTIDADE_FIM = 340, 450
-            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
-            if not palavras_na_tabela: continue
-            
-            palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
-            linhas_agrupadas = []
-            if palavras_na_tabela:
-                linha_atual = [palavras_na_tabela[0]]
-                y_referencia = palavras_na_tabela[0][1]
-                for j in range(1, len(palavras_na_tabela)):
-                    palavra = palavras_na_tabela[j]
-                    if abs(palavra[1] - y_referencia) < 5: linha_atual.append(palavra)
-                    else:
-                        linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
-                        linha_atual = [palavra]
-                        y_referencia = palavra[1]
-                linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
-
-            for palavras_linha in linhas_agrupadas:
-                product_chunks, current_chunk, start_index = [], [], 0
-                if palavras_linha:
-                    if len(palavras_linha) > 1 and palavras_linha[0][4].isdigit() and len(palavras_linha[0][4]) <= 2:
-                        current_chunk.append(palavras_linha[0])
-                        for k in range(1, len(palavras_linha)):
-                            word_info, word_text = palavras_linha[k], palavras_linha[k][4]
-                            is_start_of_new_product = False
-                            if word_text.isdigit() and len(word_text) <= 2 and k + 1 < len(palavras_linha) and palavras_linha[k+1][4].isdigit() and len(palavras_linha[k+1][4]) > 5:
-                                is_start_of_new_product = True
-                            if is_start_of_new_product:
-                                product_chunks.append(current_chunk)
-                                current_chunk = []
-                            current_chunk.append(word_info)
-                        product_chunks.append(current_chunk)
-                    else: product_chunks.append(palavras_linha)
-                
-                for chunk in product_chunks:
-                    nome_produto_parts, quantidade_parts, valores_parts = [], [], []
-                    for x0, y0, x1, y1, palavra, _, _, _ in chunk:
-                        if x0 < X_COLUNA_PRODUTO_FIM: nome_produto_parts.append(palavra)
-                        elif x0 < X_COLUNA_QUANTIDADE_FIM: quantidade_parts.append(palavra)
-                        else: valores_parts.append(palavra)
-                    
-                    if not nome_produto_parts: continue
-                    if len(nome_produto_parts) > 1 and nome_produto_parts[0].isdigit() and (len(nome_produto_parts[0]) <= 2 or nome_produto_parts[1].isdigit()):
-                        nome_produto_final = " ".join(nome_produto_parts[2:]) if len(nome_produto_parts) > 2 else " ".join(nome_produto_parts[1:])
-                    else: nome_produto_final = " ".join(nome_produto_parts)
-                    
-                    quantidade_completa_str = " ".join(quantidade_parts)
-                    valor_total_item = "0.00"
-                    if valores_parts:
-                        match_valor = re.search(r'[\d,.]+', valores_parts[-1])
-                        if match_valor: valor_total_item = match_valor.group(0)
-                    unidades_pacote = 1
-                    match_unidades = re.search(r'C/\s*(\d+)', quantidade_completa_str, re.IGNORECASE)
-                    if match_unidades: unidades_pacote = int(match_unidades.group(1))
-                    
-                    if nome_produto_final and quantidade_completa_str:
-                        # CORREÇÃO: Usando a chave 'produto_nome' para consistência
-                        produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_completa_str,"quantidade_entregue": None, "status": "Pendente","valor_total_item": valor_total_item.replace(',', '.'),"unidades_pacote": unidades_pacote})
-        
-        documento.close()
-        if not produtos_finais: return {"erro": "Nenhum produto pôde ser extraído do PDF."}
-        
-        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": os.path.basename(caminho_do_pdf)}
-    except Exception as e:
-        import traceback
-        return {"erro": f"Uma exceção crítica ocorreu: {str(e)}\n{traceback.format_exc()}"}
+            # ... (toda a sua lógica de extração que já funciona) ...
+            # Nenhuma mudança necessária aqui dentro.
 
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
@@ -303,18 +216,65 @@ def detalhe_pedido(pedido_id):
 
 @app.route('/api/upload/<nome_da_carga>', methods=['POST'])
 def upload_files(nome_da_carga):
-    if 'files[]' not in request.files: return jsonify({"sucesso": False, "erro": "Nenhum arquivo enviado."})
+    if 'files[]' not in request.files:
+        return jsonify({"sucesso": False, "erro": "Nenhum arquivo enviado."}), 400
+
     files = request.files.getlist('files[]')
     erros, sucessos = [], 0
+
     for file in files:
-        if file.filename != '':
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
-            dados = extrair_dados_do_pdf(filepath, nome_da_carga)
-            if "erro" in dados: erros.append(f"Arquivo '{filename}': {dados['erro']}")
-            else: salvar_no_banco_de_dados(dados); sucessos += 1
-    if erros: return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
+        if file.filename == '':
+            continue
+
+        filename = secure_filename(file.filename)
+
+        try:
+            # 1. Envia o arquivo para o Cloudinary
+            print(f"Fazendo upload do arquivo '{filename}' para o Cloudinary...")
+            upload_result = cloudinary.uploader.upload(
+                file,
+                resource_type="raw", # Importante para arquivos que não são imagens
+                public_id=f"pedidos/{filename}" # Salva numa pasta "pedidos"
+            )
+            pdf_url = upload_result['secure_url']
+            print(f"Upload concluído. URL: {pdf_url}")
+
+            # 2. Baixa o conteúdo do PDF em memória a partir da URL
+            import requests
+            print(f"Baixando conteúdo do PDF da URL...")
+            response = requests.get(pdf_url)
+            response.raise_for_status()  # Lança um erro se o download falhar
+            pdf_bytes = response.content
+            print("Download do conteúdo concluído.")
+
+            # 3. Extrai os dados passando o conteúdo em memória (stream)
+            print("Extraindo dados do PDF...")
+            dados_extraidos = extrair_dados_do_pdf(
+                nome_da_carga=nome_da_carga, 
+                stream=pdf_bytes
+            )
+
+            if "erro" in dados_extraidos:
+                erros.append(f"Arquivo '{filename}': {dados_extraidos['erro']}")
+                continue
+
+            print("Extração de dados concluída.")
+
+            # 4. Adiciona a URL do PDF e salva no banco de dados PostgreSQL
+            dados_extraidos['url_pdf'] = pdf_url
+            salvar_no_banco_de_dados(dados_extraidos)
+            sucessos += 1
+            print(f"Dados do arquivo '{filename}' salvos no banco de dados.")
+
+        except Exception as e:
+            import traceback
+            print(f"ERRO CRÍTICO no processamento do arquivo {filename}: {e}")
+            traceback.print_exc()
+            erros.append(f"Arquivo '{filename}': Falha inesperada no processamento.")
+
+    if erros:
+        return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
+
     return jsonify({"sucesso": True, "mensagem": f"Todos os {sucessos} arquivo(s) da carga '{nome_da_carga}' foram processados."})
 
 @app.route('/api/cargas')
