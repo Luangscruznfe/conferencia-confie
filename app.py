@@ -53,7 +53,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão corrigida para extrair quantidades completas com informações de embalagem.
+    Versão definitiva com extração de VALOR TOTAL DO ITEM corrigida.
     """
     try:
         if caminho_do_pdf:
@@ -85,7 +85,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-            # Definição da área da tabela
+            # Definição da área da tabela (permanece o mesmo)
             y_inicio, y_fim = 0, pagina.rect.height
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
             if y_inicio_list: y_inicio = y_inicio_list[0].y1
@@ -102,7 +102,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             if not palavras_na_tabela: continue
             
-            # Agrupamento de palavras em linhas
+            # Agrupamento de palavras em linhas (permanece o mesmo)
             palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
             linhas_agrupadas = []
             if palavras_na_tabela:
@@ -118,85 +118,48 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                         y_referencia = palavra[1]
                 linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
-            # ================================================================
-            # ✅ LÓGICA DE EXTRAÇÃO CORRIGIDA PARA CAPTURAR QUANTIDADES COMPLETAS
-            # ================================================================
             for linha in linhas_agrupadas:
                 linha_texto = " ".join([palavra[4] for palavra in linha])
 
-                # Pular linhas de cabeçalho
-                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']):
-                    continue
+                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']): continue
                 
-                # Remover código do item e código de barras do início (mais abrangente)
-                linha_limpa = re.sub(r'^\d+\s+\d{8,15}\s*', '', linha_texto).strip()
-                # Remove códigos de barras que possam estar no meio da linha também
-                linha_limpa = re.sub(r'\d{8,15}\s+', '', linha_limpa, count=1).strip()
+                # ✅ LÓGICA DE EXTRAÇÃO DE VALOR CORRIGIDA
+                valor_total_item = "0.00"
+                match_valor = re.search(r'R\$\s*([\d,.]+)', linha_texto)
+                if match_valor:
+                    valor_total_item = match_valor.group(1)
                 
-                # ✅ ESTRATÉGIA: Buscar do final para o início para capturar a quantidade completa
-                
-                # Padrão 1: Quantidade com embalagem completa "X CX C/XX UN"
-                match_completo = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ)\s+C/\s*\d+\s*UN)(?:\s|$)', linha_limpa)
-                if match_completo:
-                    quantidade_pedida = match_completo.group(1).strip()
-                    nome_produto_final = linha_limpa[:match_completo.start()].strip()
+                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ)(?:.*)?)', linha_texto)
+                if match_qtd:
+                    quantidade_pedida = match_qtd.group(1).strip()
+                    nome_produto_final = linha_texto[:match_qtd.start()].strip()
                 else:
-                    # Padrão 2: Quantidade com valores monetários "X CJ C/ XUN R$ XX,XX R$"
-                    match_com_valor = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ)\s+C/\s*\d+\s*UN\s+R\$\s*[\d,]+\s*R\$)', linha_limpa)
-                    if match_com_valor:
-                        # Para este caso especial, vamos extrair apenas a parte da quantidade
-                        quantidade_match = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ))', match_com_valor.group(1))
-                        if quantidade_match:
-                            quantidade_pedida = quantidade_match.group(1).strip()
-                            nome_produto_final = linha_limpa[:match_com_valor.start()].strip()
-                        else:
-                            continue
+                    partes = linha_texto.split()
+                    if len(partes) >= 2:
+                        nome_produto_final = " ".join(partes[:-1])
+                        quantidade_pedida = partes[-1]
                     else:
-                        # Padrão 3: Quantidade simples "X CX", "X UN", etc.
-                        match_simples = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ))(?:\s|$)', linha_limpa)
-                        if match_simples:
-                            quantidade_pedida = match_simples.group(1).strip()
-                            nome_produto_final = linha_limpa[:match_simples.start()].strip()
-                        else:
-                            # Fallback: última palavra como quantidade
-                            partes = linha_limpa.split()
-                            if len(partes) >= 2:
-                                quantidade_pedida = partes[-1]
-                                nome_produto_final = " ".join(partes[:-1])
-                            else:
-                                continue
+                        continue
 
-                # Validar nome do produto
-                if not nome_produto_final or len(nome_produto_final) < 3:
-                    continue
+                nome_produto_final = re.sub(r'^\d+\s+\d{8,15}\s*', '', nome_produto_final).strip()
+                if len(nome_produto_final) < 3: continue
 
-                # Extrair unidades por pacote da quantidade
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
-                if match_unidades:
-                    unidades_pacote = int(match_unidades.group(1))
+                if match_unidades: unidades_pacote = int(match_unidades.group(1))
 
                 produtos_finais.append({
                     "produto_nome": nome_produto_final, 
                     "quantidade_pedida": quantidade_pedida,
                     "quantidade_entregue": None, 
                     "status": "Pendente",
-                    "valor_total_item": "0.00",
+                    "valor_total_item": valor_total_item.replace(',', '.'), # Salva o valor extraído
                     "unidades_pacote": unidades_pacote
                 })
 
         documento.close()
-        
-        if not produtos_finais: 
-            return {"erro": "Nenhum produto pôde ser extraído do PDF."}
-        
-        return {
-            **dados_cabecalho, 
-            "produtos": produtos_finais, 
-            "status_conferencia": "Pendente", 
-            "nome_da_carga": nome_da_carga, 
-            "nome_arquivo": nome_arquivo
-        }
+        if not produtos_finais: return {"erro": "Nenhum produto pôde ser extraído do PDF."}
+        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
 
     except Exception as e:
         import traceback
