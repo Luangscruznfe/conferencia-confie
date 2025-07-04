@@ -46,13 +46,57 @@ def init_db():
     cur.close()
     conn.close()
 
+# =================================================================
+# 1. IMPORTAÇÕES
+# =================================================================
+from flask import Flask, jsonify, render_template, abort, request, Response
+import cloudinary, cloudinary.uploader, cloudinary.api
+import psycopg2, psycopg2.extras
+import json, os, re, io, fitz, shutil, requests
+from werkzeug.utils import secure_filename
+from collections import defaultdict
+from datetime import datetime
+import pandas as pd
+
+# =================================================================
+# 2. CONFIGURAÇÃO DA APP FLASK
+# =================================================================
+app = Flask(__name__)
+print("RODANDO ESTE APP:", __file__)
+
+# =================================================================
+# 3. FUNÇÕES AUXILIARES E DE BANCO DE DADOS
+# =================================================================
+
+def get_db_connection():
+    conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS pedidos (
+            id SERIAL PRIMARY KEY,
+            numero_pedido TEXT UNIQUE NOT NULL,
+            nome_cliente TEXT,
+            vendedor TEXT,
+            nome_da_carga TEXT,
+            nome_arquivo TEXT,
+            status_conferencia TEXT,
+            produtos JSONB,
+            url_pdf TEXT
+        );
+    ''')
+    conn.commit()
+    cur.close()
+    conn.close()
+
 def extrair_campo_regex(pattern, text):
-    """Função auxiliar para extrair texto usando regex."""
     match = re.search(pattern, text, re.DOTALL)
     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
-    """Versão final e definitiva da extração de PDF."""
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -70,16 +114,13 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E":
                     numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
-                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
+                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\\. Pgto:|\n)", texto_completo_pagina)
                 vendedor = "N/E"
                 try:
                     vendedor_rect_list = pagina.search_for("Vendedor")
                     if vendedor_rect_list:
                         vendedor_rect = vendedor_rect_list[0]
-                        search_area = fitz.Rect(
-                            vendedor_rect.x0 - 15, vendedor_rect.y1,
-                            vendedor_rect.x1 + 15, vendedor_rect.y1 + 20
-                        )
+                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
                         vendedor_words = pagina.get_text("words", clip=search_area)
                         if vendedor_words:
                             vendedor = vendedor_words[0][4]
@@ -92,43 +133,32 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     "vendedor": vendedor
                 }
 
-            # Detectar início e fim da área de produtos
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            if y_inicio_list:
-                y_inicio = y_inicio_list[0].y1
-            else:
-                y_inicio = 40
+            y_inicio = y_inicio_list[0].y1 if y_inicio_list else 40
 
             footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-            if footer_list:
-                y_fim = footer_list[0].y0 - 5
-            else:
-                y_fim = pagina.rect.height  # Inclui o final da página
+            y_fim = footer_list[0].y0 - 5 if footer_list else pagina.rect.height
 
             if y_inicio >= y_fim and y_fim != pagina.rect.height:
                 continue
 
-            palavras_na_tabela = [
-                p for p in pagina.get_text("words")
-                if p[1] > y_inicio and p[3] < y_fim
-            ]
+            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             if not palavras_na_tabela:
                 continue
 
             palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
             linhas_agrupadas = []
-            if palavras_na_tabela:
-                linha_atual = [palavras_na_tabela[0]]
-                y_referencia = palavras_na_tabela[0][1]
-                for j in range(1, len(palavras_na_tabela)):
-                    palavra = palavras_na_tabela[j]
-                    if abs(palavra[1] - y_referencia) < 5:
-                        linha_atual.append(palavra)
-                    else:
-                        linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
-                        linha_atual = [palavra]
-                        y_referencia = palavra[1]
-                linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+            linha_atual = [palavras_na_tabela[0]]
+            y_referencia = palavras_na_tabela[0][1]
+            for j in range(1, len(palavras_na_tabela)):
+                palavra = palavras_na_tabela[j]
+                if abs(palavra[1] - y_referencia) < 5:
+                    linha_atual.append(palavra)
+                else:
+                    linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+                    linha_atual = [palavra]
+                    y_referencia = palavra[1]
+            linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
             for linha in linhas_agrupadas:
                 linha_texto = " ".join([palavra[4] for palavra in linha])
@@ -183,6 +213,8 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         import traceback
         return {
             "erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"
+        }
+
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
