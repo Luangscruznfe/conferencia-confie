@@ -2,7 +2,7 @@ import fitz
 import os
 
 # ===== ATENÇÃO: COLOQUE O NOME DO SEU NOVO PDF AQUI =====
-NOME_DO_ARQUIVO_PDF = "24.pdf"
+NOME_DO_ARQUIVO_PDF = "12.pdf"
 # ==========================================================
 
 def script_diagnostico_final(caminho_do_pdf):

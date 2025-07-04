@@ -247,11 +247,16 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 produtos_finais.append(produto)
         
         documento.close()
-        
+
         if not produtos_finais: 
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
-        
-        # Retornar dados completos
+
+        # ✅ ADICIONE ESTE PRINT DE DEPURAÇÃO
+        print("---- DEBUG: PRODUTOS EXTRAÍDOS ----")
+        print(json.dumps(produtos_finais, indent=2, ensure_ascii=False))
+        print("-----------------------------------")
+
+        # ESTA É A LINHA FINAL CORRIGIDA, IGUAL À SUA VERSÃO LOCAL
         return {
             **dados_cabecalho, 
             "produtos": produtos_finais, 
@@ -259,11 +264,11 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             "nome_da_carga": nome_da_carga, 
             "nome_arquivo": nome_arquivo
         }
-        
+
     except Exception as e:
+        # O bloco 'except' continua no final de tudo, para capturar qualquer erro
         import traceback
         return {"erro": f"Uma exceção crítica ocorreu: {str(e)}\n{traceback.format_exc()}"}
-
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
     conn = get_db_connection()
