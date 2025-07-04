@@ -127,8 +127,10 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']):
                     continue
                 
-                # Remover código do item e código de barras do início
-                linha_limpa = re.sub(r'^\d+\s+\d{13}\s*', '', linha_texto).strip()
+                # Remover código do item e código de barras do início (mais abrangente)
+                linha_limpa = re.sub(r'^\d+\s+\d{8,15}\s*', '', linha_texto).strip()
+                # Remove códigos de barras que possam estar no meio da linha também
+                linha_limpa = re.sub(r'\d{8,15}\s+', '', linha_limpa, count=1).strip()
                 
                 # ✅ ESTRATÉGIA: Buscar do final para o início para capturar a quantidade completa
                 
@@ -198,6 +200,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
     except Exception as e:
         import traceback
         return {"erro": f"Uma exceção crítica ocorreu na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
+
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
     conn = get_db_connection()
