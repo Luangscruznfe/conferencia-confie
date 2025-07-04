@@ -393,6 +393,46 @@ def update_item_status():
             cur.close()
             conn.close()
 
+@app.route('/api/cortes')
+def api_cortes():
+    cortes_agrupados = defaultdict(list)
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # 1. Busca todos os pedidos que já foram finalizados
+        cur.execute("SELECT * FROM pedidos WHERE status_conferencia = 'Finalizado';")
+        pedidos = cur.fetchall()
+
+        # 2. Itera sobre os pedidos e produtos em Python
+        for pedido in pedidos:
+            nome_carga = pedido.get('nome_da_carga', 'Sem Carga')
+            produtos = pedido.get('produtos', [])
+            
+            for produto in produtos:
+                if produto.get('status') in ['Corte Parcial', 'Corte Total']:
+                    # Monta o item de corte com os dados do pedido e do produto
+                    item_corte = {
+                        "numero_pedido": pedido.get('numero_pedido'),
+                        "nome_cliente": pedido.get('nome_cliente'),
+                        "vendedor": pedido.get('vendedor'),
+                        "observacao": produto.get('observacao', ''),
+                        "produto": produto  # O objeto inteiro do produto
+                    }
+                    cortes_agrupados[nome_carga].append(item_corte)
+        
+        return jsonify(cortes_agrupados)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        if conn:
+            cur.close()
+            conn.close()
+
 # =================================================================
 # 5. RODA O APP
 # =================================================================
