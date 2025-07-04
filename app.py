@@ -400,38 +400,45 @@ def update_item_status():
 
 @app.route('/api/cortes')
 def api_cortes():
+    # Inicializa a estrutura de dados fora do bloco try
     cortes_agrupados = defaultdict(list)
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # 1. Busca todos os pedidos que já foram finalizados
-        cur.execute("SELECT * FROM pedidos WHERE status_conferencia = 'Finalizado';")
+        # Busca todos os pedidos, não apenas os finalizados, para depurar
+        cur.execute("SELECT * FROM pedidos;")
         pedidos = cur.fetchall()
 
-        # 2. Itera sobre os pedidos e produtos em Python
         for pedido in pedidos:
+            # Garantir que 'produtos' e 'nome_da_carga' existam
+            produtos = pedido.get('produtos', []) if pedido.get('produtos') is not None else []
             nome_carga = pedido.get('nome_da_carga', 'Sem Carga')
-            produtos = pedido.get('produtos', [])
-            
+
+            if not isinstance(produtos, list): continue # Pula se 'produtos' não for uma lista
+
             for produto in produtos:
                 if produto.get('status') in ['Corte Parcial', 'Corte Total']:
-                    # Monta o item de corte com os dados do pedido e do produto
                     item_corte = {
                         "numero_pedido": pedido.get('numero_pedido'),
                         "nome_cliente": pedido.get('nome_cliente'),
                         "vendedor": pedido.get('vendedor'),
                         "observacao": produto.get('observacao', ''),
-                        "produto": produto  # O objeto inteiro do produto
+                        "produto": produto
                     }
                     cortes_agrupados[nome_carga].append(item_corte)
-        
+
+        # A função agora retorna o JSON de sucesso aqui, dentro do try
         return jsonify(cortes_agrupados)
 
     except Exception as e:
         import traceback
+        # Imprime o erro real no log da Render para podermos ver
+        print("--- ERRO NA API DE CORTES ---")
         traceback.print_exc()
+        print("-----------------------------")
+        # Retorna um JSON de erro válido em vez de uma página HTML
         return jsonify({"erro": str(e)}), 500
     finally:
         if conn:
