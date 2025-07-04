@@ -320,20 +320,53 @@ def update_item_status():
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+        # 1. Busca o pedido específico no banco de dados
         cur.execute("SELECT * FROM pedidos WHERE numero_pedido = %s;", (dados_recebidos['pedido_id'],))
         pedido = cur.fetchone()
 
         if not pedido:
             return jsonify({"sucesso": False, "erro": "Pedido não encontrado no banco de dados."}), 404
 
+        # 2. Modifica a lista de produtos em memória
         produtos_atualizados = pedido['produtos']
         todos_conferidos = True
 
         for produto in produtos_atualizados:
+            # Encontra o produto específico que foi alterado no frontend
             if produto['produto_nome'] == dados_recebidos['produto_nome']:
-                # ... (toda a lógica para definir o status do produto) ...
                 
-        # Verifica se todos os produtos do pedido foram conferidos
+                # ===================================================
+                # ✅ LÓGICA DE ATUALIZAÇÃO QUE ESTAVA FALTANDO
+                # ===================================================
+                qtd_entregue_str = dados_recebidos['quantidade_entregue']
+                observacao_texto = dados_recebidos.get('observacao', '')
+                
+                produto['quantidade_entregue'] = qtd_entregue_str
+                produto['observacao'] = observacao_texto
+                
+                # Lógica para definir o status (Confirmado, Corte Total, Corte Parcial)
+                qtd_pedida_str = produto.get('quantidade_pedida', '0')
+                unidades_pacote = int(produto.get('unidades_pacote', 1))
+                match_pacotes = re.match(r'(\d+)', qtd_pedida_str)
+                pacotes_pedidos = int(match_pacotes.group(1)) if match_pacotes else 0
+                total_unidades_pedidas = pacotes_pedidos * unidades_pacote
+                
+                try:
+                    qtd_entregue_int = int(qtd_entregue_str)
+                    if qtd_entregue_int == total_unidades_pedidas:
+                        status_final = "Confirmado"
+                    elif qtd_entregue_int == 0:
+                        status_final = "Corte Total"
+                    else:
+                        status_final = "Corte Parcial"
+                except (ValueError, TypeError):
+                    status_final = "Corte Parcial"
+                
+                produto['status'] = status_final
+                # ===================================================
+                break # Para o loop pois já achamos e atualizamos o produto
+
+        # 3. Verifica se todos os produtos do pedido foram conferidos
         for produto in produtos_atualizados:
             if produto['status'] == 'Pendente':
                 todos_conferidos = False
@@ -341,12 +374,7 @@ def update_item_status():
         
         novo_status_conferencia = 'Finalizado' if todos_conferidos else 'Pendente'
         
-        # ✅ PRINTS DE DEPURAÇÃO ADICIONADOS AQUI
-        print("---- DEBUG UPDATE ----")
-        print(f"Pedido: {dados_recebidos['pedido_id']}, Todos os itens conferidos? {todos_conferidos}, Novo Status do Pedido: {novo_status_conferencia}")
-        print("----------------------")
-
-        # Salva (UPDATE) a lista de produtos e o status da conferência de volta no banco
+        # 4. Salva (UPDATE) a lista de produtos e o status da conferência de volta no banco
         sql_update = """
             UPDATE pedidos 
             SET produtos = %s, status_conferencia = %s
