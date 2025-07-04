@@ -9,6 +9,8 @@ from werkzeug.utils import secure_filename
 from collections import defaultdict
 from datetime import datetime
 import pandas as pd
+import re
+import fitz
 
 # =================================================================
 # 2. CONFIGURAÇÃO DA APP FLASK
@@ -46,13 +48,8 @@ def init_db():
     cur.close()
     conn.close()
 
-def extrair_campo_regex(pattern, text):
-    """Função auxiliar para extrair texto usando regex."""
-    match = re.search(pattern, text, re.DOTALL)
-    return match.group(1).replace('\n', ' ').strip() if match else "N/E"
-
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
-    """Versão final e definitiva da extração de PDF."""
+    """Versão corrigida da extração de PDF - resolve problema do último produto."""
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -68,7 +65,8 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             if i == 0:
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
-                if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
+                if numero_pedido == "N/E": 
+                    numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
                 nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
                 vendedor = "N/E"
                 try:
@@ -77,11 +75,13 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                         vendedor_rect = vendedor_rect_list[0]
                         search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
                         vendedor_words = pagina.get_text("words", clip=search_area)
-                        if vendedor_words: vendedor = vendedor_words[0][4]
+                        if vendedor_words: 
+                            vendedor = vendedor_words[0][4]
                 except Exception:
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
+            # Definir área de extração dos produtos
             y_inicio, y_fim = 0, pagina.rect.height
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
             if y_inicio_list:
@@ -89,20 +89,34 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             else:
                 y_inicio = 40
 
+            # CORREÇÃO: Melhorar a detecção do fim da tabela
             y_fim_list = pagina.search_for("TOTAL GERAL")
             if y_fim_list:
                 y_fim = y_fim_list[0].y0
             else:
-                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-                if footer_list:
-                    y_fim = footer_list[0].y0 - 5
+                # Procurar por outros indicadores de fim da tabela
+                footer_indicators = [
+                    "POR GENTILEZA CONFERIR",
+                    "Vencimentos:",
+                    "Observações:",
+                    "**POR GENTILEZA"
+                ]
+                for indicator in footer_indicators:
+                    footer_list = pagina.search_for(indicator)
+                    if footer_list:
+                        y_fim = footer_list[0].y0 - 5
+                        break
                 else:
-                    y_fim = pagina.rect.height - 40
+                    # Se não encontrar nenhum indicador, usar quase toda a página
+                    y_fim = pagina.rect.height - 20
 
-            if y_inicio >= y_fim and y_fim != pagina.rect.height: continue
+            # CORREÇÃO: Verificar se a área é válida antes de continuar
+            if y_inicio >= y_fim - 10:  # Deixar margem mínima
+                continue
             
             palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
-            if not palavras_na_tabela: continue
+            if not palavras_na_tabela: 
+                continue
 
             palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
             linhas_agrupadas = []
@@ -121,35 +135,111 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
             for linha in linhas_agrupadas:
                 linha_texto = " ".join([palavra[4] for palavra in linha])
-                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']): continue
+                
+                # Pular cabeçalhos
+                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']): 
+                    continue
+                
+                # CORREÇÃO: Adicionar filtros para evitar linhas de rodapé
+                if any(rodape in linha_texto.upper() for rodape in ['TOTAL GERAL', 'POR GENTILEZA', 'VENCIMENTOS', 'OBSERVAÇÕES']):
+                    continue
                 
                 valor_total_item, quantidade_pedida, nome_produto_final = "0.00", "N/A", linha_texto
                 
+                # Extrair valor total
                 match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_texto)
                 if match_valor:
                     valor_total_item = match_valor.group(1).replace('R$', '').strip()
                     nome_produto_final = nome_produto_final[:match_valor.start()].strip()
 
+                # Extrair quantidade
                 match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ).*)', nome_produto_final)
                 if match_qtd:
                     quantidade_pedida = match_qtd.group(1).strip()
                     nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
                 
+                # Limpar nome do produto
                 nome_produto_final = re.sub(r'^\d+\s+\d{8,15}\s*', '', nome_produto_final).strip()
-                if len(nome_produto_final) < 3: continue
+                
+                # CORREÇÃO: Validar se é uma linha de produto válida
+                if len(nome_produto_final) < 3: 
+                    continue
+                
+                # Verificar se tem código de barras (indicador de produto válido)
+                if not re.search(r'\d{8,15}', linha_texto):
+                    continue
 
+                # Extrair unidades do pacote
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
-                if match_unidades: unidades_pacote = int(match_unidades.group(1))
+                if match_unidades: 
+                    unidades_pacote = int(match_unidades.group(1))
 
-                produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote})
+                produtos_finais.append({
+                    "produto_nome": nome_produto_final,
+                    "quantidade_pedida": quantidade_pedida,
+                    "quantidade_entregue": None,
+                    "status": "Pendente",
+                    "valor_total_item": valor_total_item.replace(',', '.'),
+                    "unidades_pacote": unidades_pacote
+                })
 
         documento.close()
-        if not produtos_finais: return {"erro": "Nenhum produto pôde ser extraído do PDF."}
-        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
+        
+        if not produtos_finais: 
+            return {"erro": "Nenhum produto pôde ser extraído do PDF."}
+            
+        return {
+            **dados_cabecalho,
+            "produtos": produtos_finais,
+            "status_conferencia": "Pendente",
+            "nome_da_carga": nome_da_carga,
+            "nome_arquivo": nome_arquivo
+        }
+        
     except Exception as e:
         import traceback
         return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
+
+
+# Função adicional para debug - ajuda a identificar problemas
+def debug_extração_pdf(caminho_do_pdf=None, stream=None):
+    """Função para debug da extração - mostra detalhes do processamento."""
+    try:
+        if caminho_do_pdf:
+            documento = fitz.open(caminho_do_pdf)
+        elif stream:
+            documento = fitz.open(stream=stream, filetype="pdf")
+        else:
+            return {"erro": "Nenhum arquivo fornecido."}
+
+        for i, pagina in enumerate(documento):
+            print(f"\n=== PÁGINA {i+1} ===")
+            
+            # Encontrar limites da tabela
+            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
+            y_fim_list = pagina.search_for("TOTAL GERAL")
+            
+            y_inicio = y_inicio_list[0].y1 if y_inicio_list else 40
+            y_fim = y_fim_list[0].y0 if y_fim_list else pagina.rect.height - 20
+            
+            print(f"Y início: {y_inicio}, Y fim: {y_fim}")
+            
+            # Extrair palavras na área da tabela
+            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
+            print(f"Palavras encontradas: {len(palavras_na_tabela)}")
+            
+            # Mostrar últimas 5 linhas encontradas
+            if palavras_na_tabela:
+                palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
+                print("\nÚltimas 5 linhas de palavras:")
+                for palavra in palavras_na_tabela[-15:]:
+                    print(f"Y: {palavra[1]:.1f}, X: {palavra[0]:.1f}, Texto: '{palavra[4]}'")
+        
+        documento.close()
+        
+    except Exception as e:
+        print(f"Erro no debug: {e}")
 
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
