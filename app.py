@@ -239,6 +239,11 @@ def api_pedidos_por_carga(nome_da_carga):
     conn.close()
     return jsonify(pedidos)
 
+@app.route('/conferencia/<nome_da_carga>')
+def pagina_lista_pedidos(nome_da_carga):
+    return render_template('lista_pedidos.html', nome_da_carga=nome_da_carga)
+
+
 @app.route("/pedido/<pedido_id>")
 def detalhe_pedido(pedido_id):
     conn = get_db_connection()
