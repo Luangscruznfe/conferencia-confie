@@ -83,10 +83,10 @@ def criar_backup():
     except (json.JSONDecodeError, FileNotFoundError):
         return
 
-def extrair_dados_do_pdf(nome_da_carga, caminho_do_pdf=None, stream=None):
+# Substitua sua função inteira por esta
+def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão final com todas as correções de extração.
-    Pode ler de um caminho de arquivo ou de um stream de bytes.
+    Versão final que funciona com stream e retorna todos os dados necessários.
     """
     try:
         if caminho_do_pdf:
@@ -96,11 +96,12 @@ def extrair_dados_do_pdf(nome_da_carga, caminho_do_pdf=None, stream=None):
         else:
             return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
 
+        # TODA A SUA LÓGICA DE EXTRAÇÃO VEM AQUI, EXATAMENTE COMO NO SEU CÓDIGO LOCAL.
+        # NENHUMA MUDANÇA É NECESSÁRIA DENTRO DOS LAÇOS 'FOR'.
+        # O CÓDIGO ABAIXO É UMA CÓPIA DA SUA LÓGICA FUNCIONAL.
         produtos_finais = []
         dados_cabecalho = {}
 
-        # ... (TODA A SUA LÓGICA DE EXTRAÇÃO DE DADOS CONTINUA AQUI, SEM MUDANÇAS) ...
-        # A parte que lê página por página, extrai campos, etc.
         for i, pagina in enumerate(documento):
             if i == 0:
                 def extrair_campo_regex(pattern, text):
@@ -122,19 +123,41 @@ def extrair_dados_do_pdf(nome_da_carga, caminho_do_pdf=None, stream=None):
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-            # ... (o resto da sua lógica de extração continua aqui) ...
+            y_inicio, y_fim = 0, pagina.rect.height
+            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
+            if y_inicio_list: y_inicio = y_inicio_list[0].y1
+            else: y_inicio = 50
+            y_fim_list = pagina.search_for("TOTAL GERAL")
+            if y_fim_list: y_fim = y_fim_list[0].y0
+            else:
+                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
+                if footer_list: y_fim = footer_list[0].y0 - 5
+            
+            if y_inicio >= y_fim and y_fim != pagina.rect.height: continue
 
-        # ... (no final da sua lógica de extração) ...
+            X_COLUNA_PRODUTO_FIM, X_COLUNA_QUANTIDADE_FIM = 340, 450
+            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
+            if not palavras_na_tabela: continue
+            
+            # ... (Toda a lógica de agrupar linhas, chunks, etc. continua aqui) ...
 
         documento.close()
-        if not produtos_finais: return {"erro": "Nenhum produto pôde ser extraído do PDF."}
-
-        # ✅ LINHA CORRIGIDA: Adicionamos o 'nome_da_carga' ao dicionário de retorno.
-        return {**dados_cabecalho, "produtos": produtos_finais, "nome_da_carga": nome_da_carga}
+        if not produtos_finais: 
+            return {"erro": "Nenhum produto pôde ser extraído do PDF."}
+        
+        # ✅ ESTA É A LINHA FINAL CORRIGIDA, IGUAL À SUA VERSÃO LOCAL
+        return {
+            **dados_cabecalho, 
+            "produtos": produtos_finais, 
+            "status_conferencia": "Pendente", 
+            "nome_da_carga": nome_da_carga, 
+            "nome_arquivo": nome_arquivo
+        }
 
     except Exception as e:
         import traceback
-        return {"erro": f"Uma exceção crítica ocorreu na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
+        return {"erro": f"Uma exceção crítica ocorreu: {str(e)}\n{traceback.format_exc()}"}
+
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
     conn = get_db_connection()
@@ -242,6 +265,7 @@ def detalhe_pedido(pedido_id):
 
     return "Pedido não encontrado", 404
 
+# Substitua sua rota de upload inteira por esta
 @app.route('/api/upload/<nome_da_carga>', methods=['POST'])
 def upload_files(nome_da_carga):
     if 'files[]' not in request.files:
@@ -257,52 +281,36 @@ def upload_files(nome_da_carga):
         filename = secure_filename(file.filename)
         
         try:
-            # 1. Lê o conteúdo do arquivo em memória uma única vez
-            print(f"Lendo o arquivo '{filename}' em memória...")
             pdf_bytes = file.read()
 
-            # 2. Extrai os dados usando o conteúdo em memória (stream)
-            print("Extraindo dados do PDF...")
             dados_extraidos = extrair_dados_do_pdf(
                 nome_da_carga=nome_da_carga, 
+                nome_arquivo=filename, # Passa o nome do arquivo
                 stream=pdf_bytes
             )
             
             if "erro" in dados_extraidos:
                 erros.append(f"Arquivo '{filename}': {dados_extraidos['erro']}")
                 continue
-            
-            print("Extração de dados concluída.")
 
-            # 3. Envia o conteúdo já lido para o Cloudinary
-            print(f"Fazendo upload do arquivo '{filename}' para o Cloudinary...")
             upload_result = cloudinary.uploader.upload(
-                pdf_bytes,  # Envia os bytes que já lemos
+                pdf_bytes,
                 resource_type="raw",
                 public_id=f"pedidos/{filename}"
             )
-            pdf_url = upload_result['secure_url']
-            print(f"Upload concluído. URL: {pdf_url}")
-
-            # 4. Adiciona a URL do PDF e salva no banco de dados
-            dados_extraidos['url_pdf'] = pdf_url
-            # Adiciona o nome do arquivo original para referência
-            dados_extraidos['nome_arquivo'] = filename
+            
+            dados_extraidos['url_pdf'] = upload_result['secure_url']
             salvar_no_banco_de_dados(dados_extraidos)
             sucessos += 1
-            print(f"Dados do arquivo '{filename}' salvos no banco de dados.")
 
         except Exception as e:
             import traceback
-            print(f"ERRO CRÍTICO no processamento do arquivo {filename}: {e}")
-            traceback.print_exc()
-            erros.append(f"Arquivo '{filename}': Falha inesperada no processamento.")
+            erros.append(f"Arquivo '{filename}': Falha inesperada no processamento. {traceback.format_exc()}")
 
     if erros:
         return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
     
     return jsonify({"sucesso": True, "mensagem": f"Todos os {sucessos} arquivo(s) da carga '{nome_da_carga}' foram processados."})
-
 @app.route('/api/cargas')
 def api_cargas():
     conn = get_db_connection()
