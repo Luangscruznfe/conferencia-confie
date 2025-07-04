@@ -445,6 +445,66 @@ def api_cortes():
             cur.close()
             conn.close()
 
+@app.route('/api/gerar-relatorio')
+def gerar_relatorio():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Busca todos os pedidos
+        cur.execute("SELECT * FROM pedidos;")
+        pedidos = cur.fetchall()
+
+        if not pedidos:
+            return "Nenhum pedido encontrado para gerar o relatório.", 404
+
+        dados_para_excel = []
+        for pedido in pedidos:
+            produtos = pedido.get('produtos', []) if pedido.get('produtos') is not None else []
+            if not isinstance(produtos, list): continue
+
+            for produto in produtos:
+                if produto.get('status') in ['Corte Parcial', 'Corte Total']:
+                    # A lógica de cálculo de valor do corte pode precisar de ajuste
+                    # já que 'valor_total_item' pode não estar sempre presente
+                    valor_corte = 0.0 
+                    
+                    dados_para_excel.append({
+                        'Pedido': pedido.get('numero_pedido'),
+                        'Cliente': pedido.get('nome_cliente'),
+                        'Vendedor': pedido.get('vendedor'),
+                        'Produto': produto.get('produto_nome', ''),
+                        'Quantidade Pedida': produto.get('quantidade_pedida', ''),
+                        'Quantidade Entregue': produto.get('quantidade_entregue', ''),
+                        'Status': produto.get('status', ''),
+                        'Observação': produto.get('observacao', ''),
+                        'Valor do Corte Estimado': valor_corte
+                    })
+
+        if not dados_para_excel:
+            return "Nenhum item com corte encontrado para gerar o relatório."
+
+        df = pd.DataFrame(dados_para_excel)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Cortes')
+        
+        return Response(
+            output.getvalue(),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment;filename=cortes_relatorio.xlsx"}
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return f"Erro ao gerar relatório: {e}", 500
+    finally:
+        if conn:
+            cur.close()
+            conn.close()
+
 # =================================================================
 # 5. RODA O APP
 # =================================================================
