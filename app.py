@@ -65,9 +65,9 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         produtos_finais = []
         dados_cabecalho = {}
 
+        # Bloco de extração do cabeçalho (permanece o mesmo)
         for i, pagina in enumerate(documento):
             if i == 0:
-                # Extração do cabeçalho (continua igual)
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
@@ -84,7 +84,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-            # Definição da área da tabela (continua igual)
+            # Definição da área da tabela (permanece o mesmo)
             y_inicio, y_fim = 0, pagina.rect.height
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
             if y_inicio_list: y_inicio = y_inicio_list[0].y1
@@ -101,7 +101,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             if not palavras_na_tabela: continue
             
-            # Agrupamento de palavras em linhas (continua igual)
+            # Agrupamento de palavras em linhas (permanece o mesmo)
             palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
             linhas_agrupadas = []
             if palavras_na_tabela:
@@ -118,36 +118,44 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
             # ================================================================
-            # ✅ NOVA LÓGICA DE EXTRAÇÃO DE DADOS DA LINHA
+            # ✅ LÓGICA DE EXTRAÇÃO APRIMORADA
             # ================================================================
             for linha in linhas_agrupadas:
                 linha_texto = " ".join([palavra[4] for palavra in linha])
 
-                # Pular linhas de cabeçalho
                 if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']):
                     continue
-
-                # Usar Regex para encontrar os padrões que queremos
-                match_produto = re.search(r'^\s*(\d+\s+)?(\d{13})\s+(.*?)(?=\s+\d+\s+CX|\s+R\$|$)', linha_texto)
-                match_qtd = re.search(r'(\d+\s+CX.*?)(?=\s+R\$|$)', linha_texto)
                 
+                # Regex mais flexível para o nome do produto
+                match_produto = re.search(r'^\s*(\d+\s+)?(\d{13})?\s*(.*?)(?=\s+\d+\s+(?:CX|UN|PC))', linha_texto)
+                
+                nome_produto_final = "N/A"
                 if match_produto:
                     nome_produto_final = match_produto.group(3).strip()
-                    quantidade_pedida = match_qtd.group(1).strip() if match_qtd else "N/A"
-                    
-                    unidades_pacote = 1
-                    match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
-                    if match_unidades:
-                        unidades_pacote = int(match_unidades.group(1))
 
-                    produtos_finais.append({
-                        "produto_nome": nome_produto_final, 
-                        "quantidade_pedida": quantidade_pedida,
-                        "quantidade_entregue": None, 
-                        "status": "Pendente",
-                        "valor_total_item": "0.00", # Extração de valor precisa ser ajustada se necessário
-                        "unidades_pacote": unidades_pacote
-                    })
+                # Se a regex acima falhar, tenta uma abordagem mais simples
+                if nome_produto_final == "N/A" and len(linha_texto.split()) > 2:
+                    nome_produto_final = " ".join(linha_texto.split()[2:-2]) # Pega o "meio" da string
+
+                # Regex para encontrar a quantidade (padrões como "1 CX", "12 UN", etc.)
+                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP)(?:\s+C/\s*\d+\s*UN)?)', linha_texto, re.IGNORECASE)
+                quantidade_pedida = match_qtd.group(1).strip() if match_qtd else "N/A"
+
+                if nome_produto_final == "N/A" or len(nome_produto_final) < 3 : continue
+
+                unidades_pacote = 1
+                match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
+                if match_unidades:
+                    unidades_pacote = int(match_unidades.group(1))
+
+                produtos_finais.append({
+                    "produto_nome": nome_produto_final, 
+                    "quantidade_pedida": quantidade_pedida,
+                    "quantidade_entregue": None, 
+                    "status": "Pendente",
+                    "valor_total_item": "0.00", 
+                    "unidades_pacote": unidades_pacote
+                })
 
         documento.close()
         
