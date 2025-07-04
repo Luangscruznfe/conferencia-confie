@@ -83,43 +83,186 @@ def criar_backup():
     except (json.JSONDecodeError, FileNotFoundError):
         return
 
-# Substitua sua função inteira por esta
-# Dentro da sua função extrair_dados_do_pdf
+
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
+    """
+    Versão final que funciona com stream e retorna todos os dados necessários.
+    """
     try:
-        # ... (código para abrir o documento) ...
-
+        if caminho_do_pdf:
+            documento = fitz.open(caminho_do_pdf)
+        elif stream:
+            documento = fitz.open(stream=stream, filetype="pdf")
+        else:
+            return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
+        
+        produtos_finais = []
+        dados_cabecalho = {}
+        
         for i, pagina in enumerate(documento):
+            if i == 0:
+                def extrair_campo_regex(pattern, text):
+                    match = re.search(pattern, text, re.DOTALL)
+                    return match.group(1).replace('\n', ' ').strip() if match else "N/E"
+                
+                texto_completo_pagina = pagina.get_text("text")
+                numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
+                if numero_pedido == "N/E": 
+                    numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
+                
+                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
+                vendedor = "N/E"
+                
+                try:
+                    vendedor_rect_list = pagina.search_for("Vendedor")
+                    if vendedor_rect_list:
+                        vendedor_rect = vendedor_rect_list[0]
+                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
+                        vendedor_words = pagina.get_text("words", clip=search_area)
+                        if vendedor_words: 
+                            vendedor = vendedor_words[0][4]
+                except Exception:
+                    vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
+                
+                dados_cabecalho = {
+                    "numero_pedido": numero_pedido, 
+                    "nome_cliente": nome_cliente, 
+                    "vendedor": vendedor
+                }
             
-            # ADICIONE ESTES PRINTS PARA VER O TEXTO EXTRAÍDO
-            texto_completo_pagina = pagina.get_text("text")
-            print("---- DEBUG: INÍCIO DO TEXTO DA PÁGINA ----")
-            print(texto_completo_pagina)
-            print("---- DEBUG: FIM DO TEXTO DA PÁGINA ----")
-
-            # ... (sua lógica para extrair cabeçalho) ...
-            
+            # Definir área da tabela
             y_inicio, y_fim = 0, pagina.rect.height
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            y_fim_list = pagina.search_for("TOTAL GERAL")
-
-            if y_inicio_list: y_inicio = y_inicio_list[0].y1
-            else: y_inicio = 50
+            if y_inicio_list: 
+                y_inicio = y_inicio_list[0].y1
+            else: 
+                y_inicio = 50
             
-            if y_fim_list: y_fim = y_fim_list[0].y0
+            y_fim_list = pagina.search_for("TOTAL GERAL")
+            if y_fim_list: 
+                y_fim = y_fim_list[0].y0
             else:
                 footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-                if footer_list: y_fim = footer_list[0].y0 - 5
+                if footer_list: 
+                    y_fim = footer_list[0].y0 - 5
             
-            # ADICIONE ESTE PRINT PARA VER AS COORDENADAS
-            print(f"---- DEBUG: Coordenadas calculadas -> Y_INICIO={y_inicio}, Y_FIM={y_fim}")
+            if y_inicio >= y_fim and y_fim != pagina.rect.height: 
+                continue
             
+            X_COLUNA_PRODUTO_FIM, X_COLUNA_QUANTIDADE_FIM = 340, 450
             palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             
-            # ADICIONE ESTE PRINT PARA VER QUANTAS PALAVRAS FORAM ENCONTRADAS
-            print(f"---- DEBUG: Palavras encontradas na área da tabela: {len(palavras_na_tabela)}")
+            if not palavras_na_tabela: 
+                continue
             
-            # ... (resto da sua função) ...
+            # Agrupar palavras por linha
+            linhas_agrupadas = {}
+            for palavra in palavras_na_tabela:
+                x, y, x2, y2, texto, bloco, linha_num, palavra_num = palavra
+                y_arredondado = round(y, 1)
+                
+                if y_arredondado not in linhas_agrupadas:
+                    linhas_agrupadas[y_arredondado] = []
+                linhas_agrupadas[y_arredondado].append(palavra)
+            
+            # Processar cada linha
+            for y_linha, palavras_linha in linhas_agrupadas.items():
+                palavras_linha.sort(key=lambda x: x[0])  # Ordenar por posição X
+                
+                # Extrair dados da linha
+                produto_nome = ""
+                quantidade_pedida = "1"
+                valor_total = "0,00"
+                unidades_pacote = 1
+                
+                # Agrupar palavras por chunks (colunas)
+                chunks = []
+                chunk_atual = []
+                x_anterior = 0
+                
+                for palavra in palavras_linha:
+                    x, y, x2, y2, texto, bloco, linha_num, palavra_num = palavra
+                    
+                    # Se há muito espaço entre palavras, criar novo chunk
+                    if x - x_anterior > 20 and chunk_atual:
+                        chunks.append(chunk_atual)
+                        chunk_atual = []
+                    
+                    chunk_atual.append(palavra)
+                    x_anterior = x2
+                
+                if chunk_atual:
+                    chunks.append(chunk_atual)
+                
+                # Processar chunks para extrair dados
+                for chunk in chunks:
+                    chunk_texto = ' '.join([p[4] for p in chunk])
+                    chunk_x_inicio = chunk[0][0]
+                    chunk_x_fim = chunk[-1][2]
+                    
+                    # Coluna do produto (geralmente a primeira/mais larga)
+                    if chunk_x_inicio < X_COLUNA_PRODUTO_FIM and len(chunk_texto) > 2:
+                        if not any(char.isdigit() for char in chunk_texto) or len(chunk_texto) > 10:
+                            if produto_nome:
+                                produto_nome += " " + chunk_texto
+                            else:
+                                produto_nome = chunk_texto
+                    
+                    # Coluna da quantidade
+                    elif chunk_x_inicio < X_COLUNA_QUANTIDADE_FIM:
+                        if re.match(r'^\d+$', chunk_texto.strip()):
+                            quantidade_pedida = chunk_texto.strip()
+                    
+                    # Coluna do valor (geralmente a última)
+                    elif ',' in chunk_texto or '.' in chunk_texto:
+                        if re.match(r'^\d+[.,]\d+$', chunk_texto.strip()):
+                            valor_total = chunk_texto.strip()
+                
+                # Limpar e validar dados extraídos
+                produto_nome = produto_nome.strip()
+                
+                # Pular linhas de cabeçalho ou vazias
+                if (not produto_nome or 
+                    len(produto_nome) < 3 or 
+                    any(cabecalho in produto_nome.upper() for cabecalho in 
+                        ['ITEM', 'CÓDIGO', 'DESCRIÇÃO', 'QTDE', 'VALOR', 'TOTAL', 'BARRAS'])):
+                    continue
+                
+                # Tentar extrair unidades por pacote do nome do produto
+                match_unidades = re.search(r'(\d+)\s*UN', produto_nome.upper())
+                if match_unidades:
+                    unidades_pacote = int(match_unidades.group(1))
+                
+                # Criar objeto do produto
+                produto = {
+                    'produto_nome': produto_nome,
+                    'quantidade_pedida': quantidade_pedida,
+                    'valor_total_item': valor_total,
+                    'unidades_pacote': unidades_pacote,
+                    'quantidade_entregue': None,
+                    'observacao': '',
+                    'status': 'Pendente'
+                }
+                
+                produtos_finais.append(produto)
+        
+        documento.close()
+        
+        if not produtos_finais: 
+            return {"erro": "Nenhum produto pôde ser extraído do PDF."}
+        
+        # Retornar dados completos
+        return {
+            **dados_cabecalho, 
+            "produtos": produtos_finais, 
+            "status_conferencia": "Pendente", 
+            "nome_da_carga": nome_da_carga, 
+            "nome_arquivo": nome_arquivo
+        }
+        
+    except Exception as e:
+        import traceback
+        return {"erro": f"Uma exceção crítica ocorreu: {str(e)}\n{traceback.format_exc()}"}
 
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
