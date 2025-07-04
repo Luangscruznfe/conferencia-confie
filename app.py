@@ -21,54 +21,6 @@ print("RODANDO ESTE APP:", __file__)
 # =================================================================
 
 def get_db_connection():
-    """Cria e retorna uma conexão com o banco de dados PostgreSQL."""
-    conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
-    return conn
-
-def init_db():
-    """Garante que a tabela 'pedidos' exista no banco de dados com TODAS as colunas."""
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS pedidos (
-            id SERIAL PRIMARY KEY,
-            numero_pedido TEXT UNIQUE NOT NULL,
-            nome_cliente TEXT,
-            vendedor TEXT,
-            nome_da_carga TEXT,
-            nome_arquivo TEXT,
-            status_conferencia TEXT,
-            produtos JSONB,
-            url_pdf TEXT
-        );
-    ''')
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# =================================================================
-# 1. IMPORTAÇÕES
-# =================================================================
-from flask import Flask, jsonify, render_template, abort, request, Response
-import cloudinary, cloudinary.uploader, cloudinary.api
-import psycopg2, psycopg2.extras
-import json, os, re, io, fitz, shutil, requests
-from werkzeug.utils import secure_filename
-from collections import defaultdict
-from datetime import datetime
-import pandas as pd
-
-# =================================================================
-# 2. CONFIGURAÇÃO DA APP FLASK
-# =================================================================
-app = Flask(__name__)
-print("RODANDO ESTE APP:", __file__)
-
-# =================================================================
-# 3. FUNÇÕES AUXILIARES E DE BANCO DE DADOS
-# =================================================================
-
-def get_db_connection():
     conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
     return conn
 
@@ -91,10 +43,6 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
-
-def extrair_campo_regex(pattern, text):
-    match = re.search(pattern, text, re.DOTALL)
-    return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     try:
@@ -114,13 +62,16 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E":
                     numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
-                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\\. Pgto:|\n)", texto_completo_pagina)
+                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
                 vendedor = "N/E"
                 try:
                     vendedor_rect_list = pagina.search_for("Vendedor")
                     if vendedor_rect_list:
                         vendedor_rect = vendedor_rect_list[0]
-                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
+                        search_area = fitz.Rect(
+                            vendedor_rect.x0 - 15, vendedor_rect.y1,
+                            vendedor_rect.x1 + 15, vendedor_rect.y1 + 20
+                        )
                         vendedor_words = pagina.get_text("words", clip=search_area)
                         if vendedor_words:
                             vendedor = vendedor_words[0][4]
@@ -137,10 +88,10 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             y_inicio = y_inicio_list[0].y1 if y_inicio_list else 40
 
             footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-            y_fim = footer_list[0].y0 - 5 if footer_list else pagina.rect.height
-
-            if y_inicio >= y_fim and y_fim != pagina.rect.height:
-                continue
+            if footer_list:
+                y_fim = footer_list[0].y1 + 50  # Inclui conteúdo abaixo do rodapé
+            else:
+                y_fim = pagina.rect.height
 
             palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             if not palavras_na_tabela:
