@@ -52,7 +52,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão final com lógica de extração aprimorada usando Regex para maior precisão.
+    Versão definitiva com lógica de extração focada em encontrar a quantidade primeiro.
     """
     try:
         if caminho_do_pdf:
@@ -118,7 +118,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
             # ================================================================
-            # ✅ LÓGICA DE EXTRAÇÃO APRIMORADA
+            # ✅ LÓGICA DE EXTRAÇÃO SIMPLIFICADA E FINAL
             # ================================================================
             for linha in linhas_agrupadas:
                 linha_texto = " ".join([palavra[4] for palavra in linha])
@@ -126,22 +126,26 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']):
                     continue
                 
-                # Regex mais flexível para o nome do produto
-                match_produto = re.search(r'^\s*(\d+\s+)?(\d{13})?\s*(.*?)(?=\s+\d+\s+(?:CX|UN|PC))', linha_texto)
+                # Encontrar a quantidade primeiro
+                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP)(?:.*)?)', linha_texto)
                 
-                nome_produto_final = "N/A"
-                if match_produto:
-                    nome_produto_final = match_produto.group(3).strip()
+                if match_qtd:
+                    quantidade_pedida = match_qtd.group(1).strip()
+                    # O nome do produto é tudo que vem ANTES da quantidade
+                    nome_produto_final = linha_texto[:match_qtd.start()].strip()
+                else:
+                    # Se não encontrar um padrão de quantidade, assume o padrão antigo
+                    partes = linha_texto.split()
+                    if len(partes) > 1:
+                        nome_produto_final = " ".join(partes[:-1])
+                        quantidade_pedida = partes[-1]
+                    else:
+                        continue # Pula linhas que não consegue entender
 
-                # Se a regex acima falhar, tenta uma abordagem mais simples
-                if nome_produto_final == "N/A" and len(linha_texto.split()) > 2:
-                    nome_produto_final = " ".join(linha_texto.split()[2:-2]) # Pega o "meio" da string
+                # Remove o código do item e o código de barras do início, se existirem
+                nome_produto_final = re.sub(r'^\d+\s+\d{13}\s*', '', nome_produto_final).strip()
 
-                # Regex para encontrar a quantidade (padrões como "1 CX", "12 UN", etc.)
-                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP)(?:\s+C/\s*\d+\s*UN)?)', linha_texto, re.IGNORECASE)
-                quantidade_pedida = match_qtd.group(1).strip() if match_qtd else "N/A"
-
-                if nome_produto_final == "N/A" or len(nome_produto_final) < 3 : continue
+                if len(nome_produto_final) < 3: continue
 
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
@@ -153,7 +157,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     "quantidade_pedida": quantidade_pedida,
                     "quantidade_entregue": None, 
                     "status": "Pendente",
-                    "valor_total_item": "0.00", 
+                    "valor_total_item": "0.00",
                     "unidades_pacote": unidades_pacote
                 })
 
