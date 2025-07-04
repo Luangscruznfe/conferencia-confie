@@ -5,6 +5,7 @@ from flask import Flask, jsonify, render_template, abort, request, Response
 import cloudinary, cloudinary.uploader, cloudinary.api
 import psycopg2, psycopg2.extras
 import json, os, re, io, fitz, shutil, requests
+import pandas as pd
 from werkzeug.utils import secure_filename
 from collections import defaultdict
 from datetime import datetime
