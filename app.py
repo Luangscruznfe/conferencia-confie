@@ -511,6 +511,35 @@ def gerar_relatorio():
         if conn:
             cur.close()
             conn.close()
+
+@app.route('/api/resetar-dia', methods=['POST'])
+def resetar_dia():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # O comando TRUNCATE é mais rápido que DELETE para limpar a tabela inteira
+        # e reinicia a contagem dos IDs.
+        cur.execute("TRUNCATE TABLE pedidos RESTART IDENTITY;")
+        conn.commit()
+        
+        # Nota: Os arquivos no Cloudinary NÃO serão apagados. 
+        # Isso é uma medida de segurança e evita o uso excessivo da API.
+        # A limpeza no Cloudinary pode ser feita manualmente, se necessário.
+        
+        return jsonify({"sucesso": True, "mensagem": "Todos os pedidos foram apagados. O sistema está pronto para um novo dia."})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
+    finally:
+        if conn:
+            cur.close()
+            conn.close()
+
+
 # =================================================================
 # 5. RODA O APP
 # =================================================================
