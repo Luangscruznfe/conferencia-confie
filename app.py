@@ -54,7 +54,7 @@ def extrair_campo_regex(pattern, text):
     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
-    """Versão final corrigida - garante que o último produto seja extraído."""
+    """Versão corrigida - garante que TODOS os produtos sejam extraídos, incluindo o último."""
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -87,7 +87,8 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
             # ===============================================
-            # NOVA ABORDAGEM: Extrair TUDO e depois filtrar
+            # CORREÇÃO: Extrair produtos até encontrar "TOTAL GERAL"
+            # mas processar TODAS as linhas de produtos antes do total
             # ===============================================
             
             # Pegar o texto completo da página
@@ -96,8 +97,9 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             # Dividir em linhas
             linhas = texto_completo.split('\n')
             
-            # Encontrar onde começam os produtos
+            # Encontrar onde começam os produtos e onde termina
             inicio_produtos = False
+            linhas_produtos = []
             
             for linha in linhas:
                 linha = linha.strip()
@@ -109,25 +111,30 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     inicio_produtos = True
                     continue
                 
-                # Detectar fim da tabela de produtos
-                if any(fim in linha.upper() for fim in ['TOTAL GERAL', 'POR GENTILEZA CONFERIR', 'VENCIMENTOS:']):
-                    break
-                
-                # Se estamos na seção de produtos, processar linha
+                # Se estamos na seção de produtos, coletar todas as linhas
                 if inicio_produtos:
-                    # Verificar se a linha tem estrutura de produto
-                    # (número do item + código de barras + quantidade + produto + valores)
-                    if re.search(r'^\d+\s+\d{8,15}\s+\d+\s+(?:UN|CX|PC|FD|DP|CJ)', linha):
-                        produto_info = processar_linha_produto(linha)
-                        if produto_info:
-                            produtos_finais.append(produto_info)
+                    # Parar apenas quando encontrar "TOTAL GERAL" ou indicadores de fim
+                    if linha.upper().startswith('TOTAL GERAL') or \
+                       linha.upper().startswith('**POR GENTILEZA CONFERIR') or \
+                       linha.upper().startswith('VENCIMENTOS:'):
+                        break
                     
-                    # CORREÇÃO ESPECÍFICA: Processar linhas que começam com "C/ 12UN18"
-                    # Estas são linhas de continuação que podem ser o último produto
-                    elif re.search(r'^C/\s*\d+UN\d+', linha):
-                        produto_info = processar_linha_produto(linha)
-                        if produto_info:
-                            produtos_finais.append(produto_info)
+                    # Coletar linha de produto
+                    linhas_produtos.append(linha)
+            
+            # Processar todas as linhas coletadas
+            for linha in linhas_produtos:
+                linha = linha.strip()
+                if not linha:
+                    continue
+                
+                # Verificar se é linha de produto válida
+                if (re.search(r'^\d+\s+\d{8,15}\s+\d+\s+(?:UN|CX|PC|FD|DP|CJ)', linha) or
+                    re.search(r'^C/\s*\d+UN\d+', linha)):
+                    
+                    produto_info = processar_linha_produto(linha)
+                    if produto_info:
+                        produtos_finais.append(produto_info)
 
         documento.close()
         
@@ -148,7 +155,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
 
 def processar_linha_produto(linha):
-    """Processa uma linha individual de produto."""
+    """Versão melhorada para processar linha de produto com melhor tratamento do padrão 'C/ XUN'."""
     try:
         linha = linha.strip()
         if len(linha) < 10:  # Linha muito curta
@@ -156,9 +163,9 @@ def processar_linha_produto(linha):
         
         # Extrair valores (sempre no final da linha)
         valores = []
-        matches_valor = re.findall(r'R\$\s*[\d,]+', linha)
+        matches_valor = re.findall(r'R\$\s*[\d,.]+', linha)
         if matches_valor:
-            valores = [v.replace('R$', '').strip() for v in matches_valor]
+            valores = [v.replace('R$', '').strip().replace(',', '.') for v in matches_valor]
         
         valor_total = valores[0] if valores else "0.00"
         
@@ -182,15 +189,22 @@ def processar_linha_produto(linha):
         
         # Extrair código de barras (sequência de 8-15 dígitos)
         codigo_barras_match = re.search(r'\d{8,15}', linha_sem_valores)
+        codigo_barras = ""
         if codigo_barras_match:
+            codigo_barras = codigo_barras_match.group()
             # Remover código de barras
             linha_sem_valores = linha_sem_valores[:codigo_barras_match.start()] + linha_sem_valores[codigo_barras_match.end():]
         
         # Remover número do item no início (se houver)
         linha_sem_valores = re.sub(r'^\d+\s+', '', linha_sem_valores)
         
-        # Remover padrão "C/ XUN" do início se houver
-        linha_sem_valores = re.sub(r'^C/\s*\d+UN\d+\s*', '', linha_sem_valores)
+        # Extrair e processar padrão "C/ XUN" - IMPORTANTE para unidades do pacote
+        unidades_pacote = 1
+        padrao_c_match = re.search(r'C/\s*(\d+)UN', linha_sem_valores, re.IGNORECASE)
+        if padrao_c_match:
+            unidades_pacote = int(padrao_c_match.group(1))
+            # Remover o padrão "C/ XUN" da linha
+            linha_sem_valores = re.sub(r'C/\s*\d+UN\d*\s*', '', linha_sem_valores)
         
         # O que sobra é o nome do produto
         nome_produto = linha_sem_valores.strip()
@@ -199,19 +213,14 @@ def processar_linha_produto(linha):
         if len(nome_produto) < 3:
             return None
             
-        # Extrair unidades do pacote
-        unidades_pacote = 1
-        match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
-        if match_unidades:
-            unidades_pacote = int(match_unidades.group(1))
-        
         return {
             "produto_nome": nome_produto,
             "quantidade_pedida": quantidade_pedida,
             "quantidade_entregue": None,
             "status": "Pendente",
-            "valor_total_item": valor_total.replace(',', '.'),
-            "unidades_pacote": unidades_pacote
+            "valor_total_item": valor_total,
+            "unidades_pacote": unidades_pacote,
+            "codigo_barras": codigo_barras
         }
         
     except Exception as e:
@@ -219,8 +228,8 @@ def processar_linha_produto(linha):
         return None
 
 
-def debug_linhas_pdf(caminho_do_pdf=None, stream=None):
-    """Debug específico para ver todas as linhas do PDF."""
+def debug_extração_completa(caminho_do_pdf=None, stream=None):
+    """Debug para mostrar exatamente o que está sendo extraído."""
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -229,12 +238,16 @@ def debug_linhas_pdf(caminho_do_pdf=None, stream=None):
         else:
             return {"erro": "Nenhum arquivo fornecido."}
 
+        print("=== DEBUG: EXTRAÇÃO COMPLETA ===")
+        
         for i, pagina in enumerate(documento):
-            print(f"\n=== PÁGINA {i+1} ===")
+            print(f"\n--- PÁGINA {i+1} ---")
             texto_completo = pagina.get_text("text")
             linhas = texto_completo.split('\n')
             
             inicio_produtos = False
+            contador_produtos = 0
+            
             for num_linha, linha in enumerate(linhas):
                 linha = linha.strip()
                 if not linha:
@@ -242,16 +255,31 @@ def debug_linhas_pdf(caminho_do_pdf=None, stream=None):
                 
                 if "ITEM CÓD. BARRAS" in linha.upper():
                     inicio_produtos = True
-                    print(f"--- INÍCIO DOS PRODUTOS (linha {num_linha}) ---")
+                    print(f"✓ Início dos produtos detectado na linha {num_linha}")
                     continue
                 
-                if any(fim in linha.upper() for fim in ['TOTAL GERAL', 'POR GENTILEZA CONFERIR', 'VENCIMENTOS:']):
-                    print(f"--- FIM DOS PRODUTOS (linha {num_linha}) ---")
-                    break
-                
                 if inicio_produtos:
-                    print(f"Linha {num_linha}: {linha}")
+                    # Verificar se é fim dos produtos
+                    if (linha.upper().startswith('TOTAL GERAL') or 
+                        linha.upper().startswith('**POR GENTILEZA CONFERIR') or 
+                        linha.upper().startswith('VENCIMENTOS:')):
+                        print(f"✓ Fim dos produtos detectado na linha {num_linha}: {linha}")
+                        break
+                    
+                    # Verificar se é linha de produto
+                    if (re.search(r'^\d+\s+\d{8,15}\s+\d+\s+(?:UN|CX|PC|FD|DP|CJ)', linha) or
+                        re.search(r'^C/\s*\d+UN\d+', linha)):
+                        contador_produtos += 1
+                        produto_info = processar_linha_produto(linha)
+                        print(f"Produto {contador_produtos}: {linha}")
+                        if produto_info:
+                            print(f"  → Extraído: {produto_info['produto_nome']}")
+                        else:
+                            print(f"  → ERRO: Não foi possível extrair")
+                    else:
+                        print(f"Linha ignorada: {linha}")
         
+        print(f"\n✓ Total de produtos encontrados: {contador_produtos}")
         documento.close()
         
     except Exception as e:
