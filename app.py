@@ -44,6 +44,10 @@ def init_db():
     cur.close()
     conn.close()
 
+def extrair_campo_regex(pattern, text):
+    match = re.search(pattern, text, re.DOTALL)
+    return match.group(1).replace('\n', ' ').strip() if match else "N/E"
+
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     try:
         if caminho_do_pdf:
