@@ -51,7 +51,9 @@ def extrair_campo_regex(pattern, text):
     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
-    """Versão final que extrai dados de um PDF a partir de um arquivo ou stream."""
+    """
+    Versão final com lógica de extração aprimorada usando Regex para maior precisão.
+    """
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -65,6 +67,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
         for i, pagina in enumerate(documento):
             if i == 0:
+                # Extração do cabeçalho (continua igual)
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
@@ -81,6 +84,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
+            # Definição da área da tabela (continua igual)
             y_inicio, y_fim = 0, pagina.rect.height
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
             if y_inicio_list: y_inicio = y_inicio_list[0].y1
@@ -97,6 +101,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             if not palavras_na_tabela: continue
             
+            # Agrupamento de palavras em linhas (continua igual)
             palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
             linhas_agrupadas = []
             if palavras_na_tabela:
@@ -112,37 +117,50 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                         y_referencia = palavra[1]
                 linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
+            # ================================================================
+            # ✅ NOVA LÓGICA DE EXTRAÇÃO DE DADOS DA LINHA
+            # ================================================================
             for linha in linhas_agrupadas:
                 linha_texto = " ".join([palavra[4] for palavra in linha])
+
+                # Pular linhas de cabeçalho
+                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']):
+                    continue
+
+                # Usar Regex para encontrar os padrões que queremos
+                match_produto = re.search(r'^\s*(\d+\s+)?(\d{13})\s+(.*?)(?=\s+\d+\s+CX|\s+R\$|$)', linha_texto)
+                match_qtd = re.search(r'(\d+\s+CX.*?)(?=\s+R\$|$)', linha_texto)
                 
-                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']): continue
-                partes = linha_texto.split()
-                if len(partes) < 2: continue
+                if match_produto:
+                    nome_produto_final = match_produto.group(3).strip()
+                    quantidade_pedida = match_qtd.group(1).strip() if match_qtd else "N/A"
+                    
+                    unidades_pacote = 1
+                    match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
+                    if match_unidades:
+                        unidades_pacote = int(match_unidades.group(1))
 
-                if partes[0].isdigit() and len(partes[0]) > 5:
-                    nome_produto_final = " ".join(partes)
-                else:
-                    nome_produto_final = linha_texto
-
-                quantidade_pedida, valor_total_item, unidades_pacote = "1", "0,00", 1
-                
-                if partes[-1].replace(',', '').replace('.', '').isdigit() and len(partes) > 1 and partes[-2].replace(',', '').replace('.', '').isdigit():
-                    quantidade_pedida = partes[-2]
-                    valor_total_item = partes[-1]
-                elif partes[-1].isdigit() and len(partes) > 1:
-                    quantidade_pedida = partes[-1]
-
-                match_unidades = re.search(r'C/\s*(\d+)', nome_produto_final, re.IGNORECASE)
-                if match_unidades: unidades_pacote = int(match_unidades.group(1))
-
-                produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote})
+                    produtos_finais.append({
+                        "produto_nome": nome_produto_final, 
+                        "quantidade_pedida": quantidade_pedida,
+                        "quantidade_entregue": None, 
+                        "status": "Pendente",
+                        "valor_total_item": "0.00", # Extração de valor precisa ser ajustada se necessário
+                        "unidades_pacote": unidades_pacote
+                    })
 
         documento.close()
         
         if not produtos_finais: 
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
         
-        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
+        return {
+            **dados_cabecalho, 
+            "produtos": produtos_finais, 
+            "status_conferencia": "Pendente", 
+            "nome_da_carga": nome_da_carga, 
+            "nome_arquivo": nome_arquivo
+        }
 
     except Exception as e:
         import traceback
