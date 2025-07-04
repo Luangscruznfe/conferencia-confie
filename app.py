@@ -132,7 +132,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
             for linha in linhas_agrupadas:
                 linha_texto = " ".join([palavra[4] for palavra in linha])
-                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']):
+                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS', 'TOTAL GERAL']):
                     continue
 
                 valor_total_item = "0.00"
@@ -183,6 +183,8 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         import traceback
         return {
             "erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"
+        }
+
         }
 
 
