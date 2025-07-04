@@ -320,6 +320,8 @@ def detalhe_pedido(pedido_id):
     return "Pedido não encontrado", 404
 
 # Substitua sua rota de upload inteira por esta
+# Em @app.route('/api/upload/<nome_da_carga>')
+
 @app.route('/api/upload/<nome_da_carga>', methods=['POST'])
 def upload_files(nome_da_carga):
     if 'files[]' not in request.files:
@@ -336,17 +338,33 @@ def upload_files(nome_da_carga):
         
         try:
             pdf_bytes = file.read()
+            print("DEBUG: Arquivo lido em memória.")
 
-            dados_extraidos = extrair_dados_do_pdf(
-                nome_da_carga=nome_da_carga, 
-                nome_arquivo=filename, # Passa o nome do arquivo
-                stream=pdf_bytes
-            )
+            # ---- TESTE: VAMOS COMENTAR A CHAMADA PARA A FUNÇÃO PROBLEMÁTICA ----
+            # dados_extraidos = extrair_dados_do_pdf(
+            #     nome_da_carga=nome_da_carga, 
+            #     nome_arquivo=filename,
+            #     stream=pdf_bytes
+            # )
+            
+            # ---- TESTE: VAMOS CRIAR DADOS FALSOS PARA CONTINUAR O FLUXO ----
+            print("DEBUG: Criando dados de teste falsos.")
+            dados_extraidos = {
+                "numero_pedido": f"FAKE-{datetime.now().second}", 
+                "nome_cliente": "Cliente de Teste", 
+                "vendedor": "Vendedor de Teste", 
+                "produtos": [{"produto_nome": "Produto Teste", "quantidade_pedida": "1"}],
+                "nome_da_carga": nome_da_carga, 
+                "nome_arquivo": filename,
+                "status_conferencia": "Pendente"
+            }
+            # -----------------------------------------------------------------
             
             if "erro" in dados_extraidos:
                 erros.append(f"Arquivo '{filename}': {dados_extraidos['erro']}")
                 continue
 
+            print("DEBUG: Fazendo upload para o Cloudinary.")
             upload_result = cloudinary.uploader.upload(
                 pdf_bytes,
                 resource_type="raw",
@@ -354,6 +372,8 @@ def upload_files(nome_da_carga):
             )
             
             dados_extraidos['url_pdf'] = upload_result['secure_url']
+            
+            print("DEBUG: Salvando no banco de dados.")
             salvar_no_banco_de_dados(dados_extraidos)
             sucessos += 1
 
@@ -365,7 +385,7 @@ def upload_files(nome_da_carga):
         return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
     
     return jsonify({"sucesso": True, "mensagem": f"Todos os {sucessos} arquivo(s) da carga '{nome_da_carga}' foram processados."})
-@app.route('/api/cargas')
+
 def api_cargas():
     conn = get_db_connection()
     cur = conn.cursor()
