@@ -373,7 +373,3 @@ def resetar_dia():
 # =================================================================
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)
-
-esse é o codigo que esta no ar, pode me ajudar a melhorar ele?
-
-deixando ele mais limpo
