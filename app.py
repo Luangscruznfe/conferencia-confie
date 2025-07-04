@@ -177,12 +177,15 @@ init_db()
 def pagina_inicial():
     return render_template('conferencia.html')
 
+@app.route("/conferencia")
+def pagina_conferencia():
+    return render_template('conferencia.html')
+
 @app.route("/gestao")
 def pagina_gestao():
     return render_template('gestao.html')
 
-# ... (RESTO DAS SUAS ROTAS) ...
-# Substitua suas rotas existentes pelas versões abaixo, se necessário.
+
 
 @app.route('/api/upload/<nome_da_carga>', methods=['POST'])
 def upload_files(nome_da_carga):
