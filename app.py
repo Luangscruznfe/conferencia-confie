@@ -5,10 +5,10 @@ from flask import Flask, jsonify, render_template, abort, request, Response
 import cloudinary, cloudinary.uploader, cloudinary.api
 import psycopg2, psycopg2.extras
 import json, os, re, io, fitz, shutil, requests
-import pandas as pd
 from werkzeug.utils import secure_filename
 from collections import defaultdict
 from datetime import datetime
+import pandas as pd
 
 # =================================================================
 # 2. CONFIGURAÇÃO DA APP FLASK
@@ -52,9 +52,7 @@ def extrair_campo_regex(pattern, text):
     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
-    """
-    Versão final com correção de sintaxe e depuração para múltiplas páginas.
-    """
+    """Versão final e definitiva da extração de PDF."""
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -67,12 +65,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         dados_cabecalho = {}
 
         for i, pagina in enumerate(documento):
-            print(f"\n--- DEBUG: PROCESSANDO PÁGINA {i + 1} de {len(documento)} ---")
-
             if i == 0:
-                # =============================================================
-                # ✅ LÓGICA DO CABEÇALHO RESTAURADA AQUI
-                # =============================================================
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
@@ -88,69 +81,82 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 except Exception:
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
-            
-            # Lógica para definir a área da tabela
+
             y_inicio, y_fim = 0, pagina.rect.height
-            
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
             if y_inicio_list:
                 y_inicio = y_inicio_list[0].y1
-                print(f"DEBUG PÁGINA {i+1}: 'ITEM CÓD. BARRAS' encontrado. y_inicio definido como {y_inicio}")
             else:
-                y_inicio = 40 
-                print(f"DEBUG PÁGINA {i+1}: 'ITEM CÓD. BARRAS' NÃO encontrado. Usando fallback y_inicio = {y_inicio}")
+                y_inicio = 40
 
             y_fim_list = pagina.search_for("TOTAL GERAL")
             if y_fim_list:
                 y_fim = y_fim_list[0].y0
-                print(f"DEBUG PÁGINA {i+1}: 'TOTAL GERAL' encontrado. y_fim definido como {y_fim}")
             else:
                 footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
                 if footer_list:
                     y_fim = footer_list[0].y0 - 5
-                    print(f"DEBUG PÁGINA {i+1}: 'POR GENTILEZA' encontrado. y_fim definido como {y_fim}")
                 else:
-                    y_fim = pagina.rect.height - 40 
-                    print(f"DEBUG PÁGINA {i+1}: Nenhum rodapé encontrado. Usando altura da página como y_fim = {y_fim}")
+                    y_fim = pagina.rect.height - 40
 
+            if y_inicio >= y_fim and y_fim != pagina.rect.height: continue
+            
             palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
-            print(f"DEBUG PÁGINA {i+1}: {len(palavras_na_tabela)} palavras encontradas na área da tabela.")
+            if not palavras_na_tabela: continue
 
-            # ... (o resto da sua lógica para processar as palavras e extrair os produtos) ...
-            # ... (coloque sua lógica completa de extração aqui) ...
+            palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
+            linhas_agrupadas = []
+            if palavras_na_tabela:
+                linha_atual = [palavras_na_tabela[0]]
+                y_referencia = palavras_na_tabela[0][1]
+                for j in range(1, len(palavras_na_tabela)):
+                    palavra = palavras_na_tabela[j]
+                    if abs(palavra[1] - y_referencia) < 5:
+                        linha_atual.append(palavra)
+                    else:
+                        linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+                        linha_atual = [palavra]
+                        y_referencia = palavra[1]
+                linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+
+            for linha in linhas_agrupadas:
+                linha_texto = " ".join([palavra[4] for palavra in linha])
+                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']): continue
+                
+                valor_total_item, quantidade_pedida, nome_produto_final = "0.00", "N/A", linha_texto
+                
+                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_texto)
+                if match_valor:
+                    valor_total_item = match_valor.group(1).replace('R$', '').strip()
+                    nome_produto_final = nome_produto_final[:match_valor.start()].strip()
+
+                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ).*)', nome_produto_final)
+                if match_qtd:
+                    quantidade_pedida = match_qtd.group(1).strip()
+                    nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
+                
+                nome_produto_final = re.sub(r'^\d+\s+\d{8,15}\s*', '', nome_produto_final).strip()
+                if len(nome_produto_final) < 3: continue
+
+                unidades_pacote = 1
+                match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
+                if match_unidades: unidades_pacote = int(match_unidades.group(1))
+
+                produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote})
 
         documento.close()
-        
-        if not produtos_finais: 
-            return {"erro": "Nenhum produto pôde ser extraído do PDF."}
-        
-        return {
-            **dados_cabecalho, 
-            "produtos": produtos_finais, 
-            "status_conferencia": "Pendente", 
-            "nome_da_carga": nome_da_carga, 
-            "nome_arquivo": nome_arquivo
-        }
-
+        if not produtos_finais: return {"erro": "Nenhum produto pôde ser extraído do PDF."}
+        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
     except Exception as e:
         import traceback
-        return {"erro": f"Uma exceção crítica ocorreu na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
+        return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
 
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
     conn = get_db_connection()
     cur = conn.cursor()
-    sql = """
-        INSERT INTO pedidos (numero_pedido, nome_cliente, vendedor, nome_da_carga, nome_arquivo, status_conferencia, produtos, url_pdf)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (numero_pedido) DO NOTHING;
-    """
-    cur.execute(sql, (
-        dados_do_pedido.get('numero_pedido'), dados_do_pedido.get('nome_cliente'), dados_do_pedido.get('vendedor'),
-        dados_do_pedido.get('nome_da_carga'), dados_do_pedido.get('nome_arquivo'),
-        dados_do_pedido.get('status_conferencia', 'Pendente'), json.dumps(dados_do_pedido.get('produtos', [])),
-        dados_do_pedido.get('url_pdf')
-    ))
+    sql = "INSERT INTO pedidos (numero_pedido, nome_cliente, vendedor, nome_da_carga, nome_arquivo, status_conferencia, produtos, url_pdf) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (numero_pedido) DO NOTHING;"
+    cur.execute(sql, (dados_do_pedido.get('numero_pedido'), dados_do_pedido.get('nome_cliente'), dados_do_pedido.get('vendedor'), dados_do_pedido.get('nome_da_carga'), dados_do_pedido.get('nome_arquivo'), dados_do_pedido.get('status_conferencia', 'Pendente'), json.dumps(dados_do_pedido.get('produtos', [])), dados_do_pedido.get('url_pdf')))
     conn.commit()
     cur.close()
     conn.close()
@@ -158,7 +164,6 @@ def salvar_no_banco_de_dados(dados_do_pedido):
 # =================================================================
 # 4. ROTAS DO SITE (ENDEREÇOS)
 # =================================================================
-# Roda a função para garantir que a tabela exista quando o app iniciar
 init_db()
 
 @app.route("/")
@@ -173,38 +178,46 @@ def pagina_conferencia():
 def pagina_gestao():
     return render_template('gestao.html')
 
+@app.route('/conferencia/<nome_da_carga>')
+def pagina_lista_pedidos(nome_da_carga):
+    return render_template('lista_pedidos.html', nome_da_carga=nome_da_carga)
 
+@app.route("/pedido/<pedido_id>")
+def detalhe_pedido(pedido_id):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM pedidos WHERE numero_pedido = %s;", (pedido_id,))
+    pedido_encontrado = cur.fetchone()
+    cur.close()
+    conn.close()
+    if pedido_encontrado:
+        return render_template('detalhe_pedido.html', pedido=pedido_encontrado)
+    return "Pedido não encontrado", 404
+
+# --- ROTAS DE API ---
 
 @app.route('/api/upload/<nome_da_carga>', methods=['POST'])
 def upload_files(nome_da_carga):
-    if 'files[]' not in request.files:
-        return jsonify({"sucesso": False, "erro": "Nenhum arquivo enviado."}), 400
-    
+    if 'files[]' not in request.files: return jsonify({"sucesso": False, "erro": "Nenhum arquivo enviado."}), 400
     files = request.files.getlist('files[]')
     erros, sucessos = [], 0
-    
     for file in files:
         if file.filename == '': continue
         filename = secure_filename(file.filename)
         try:
             pdf_bytes = file.read()
             dados_extraidos = extrair_dados_do_pdf(nome_da_carga=nome_da_carga, nome_arquivo=filename, stream=pdf_bytes)
-            
             if "erro" in dados_extraidos:
                 erros.append(f"Arquivo '{filename}': {dados_extraidos['erro']}")
                 continue
-
             upload_result = cloudinary.uploader.upload(pdf_bytes, resource_type="raw", public_id=f"pedidos/{filename}")
-            
             dados_extraidos['url_pdf'] = upload_result['secure_url']
             salvar_no_banco_de_dados(dados_extraidos)
             sucessos += 1
         except Exception as e:
             import traceback
             erros.append(f"Arquivo '{filename}': Falha inesperada no processamento. {traceback.format_exc()}")
-
-    if erros:
-        return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
+    if erros: return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
     return jsonify({"sucesso": True, "mensagem": f"Todos os {sucessos} arquivo(s) da carga '{nome_da_carga}' foram processados."})
 
 @app.route('/api/cargas')
@@ -227,246 +240,118 @@ def api_pedidos_por_carga(nome_da_carga):
     conn.close()
     return jsonify(pedidos)
 
-@app.route('/conferencia/<nome_da_carga>')
-def pagina_lista_pedidos(nome_da_carga):
-    return render_template('lista_pedidos.html', nome_da_carga=nome_da_carga)
-
-
-@app.route("/pedido/<pedido_id>")
-def detalhe_pedido(pedido_id):
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM pedidos WHERE numero_pedido = %s;", (pedido_id,))
-    pedido_encontrado = cur.fetchone()
-    cur.close()
-    conn.close()
-    if pedido_encontrado:
-        return render_template('detalhe_pedido.html', pedido=pedido_encontrado)
-    return "Pedido não encontrado", 404
-
-
 @app.route('/api/item/update', methods=['POST'])
 def update_item_status():
     dados_recebidos = request.json
     status_final = "Erro"
-    
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-        # 1. Busca o pedido específico no banco de dados
         cur.execute("SELECT * FROM pedidos WHERE numero_pedido = %s;", (dados_recebidos['pedido_id'],))
         pedido = cur.fetchone()
-
-        if not pedido:
-            return jsonify({"sucesso": False, "erro": "Pedido não encontrado no banco de dados."}), 404
-
-        # 2. Modifica a lista de produtos em memória
+        if not pedido: return jsonify({"sucesso": False, "erro": "Pedido não encontrado."}), 404
         produtos_atualizados = pedido['produtos']
         todos_conferidos = True
-
         for produto in produtos_atualizados:
-            # Encontra o produto específico que foi alterado no frontend
             if produto['produto_nome'] == dados_recebidos['produto_nome']:
-                
-                # ===================================================
-                # ✅ LÓGICA DE ATUALIZAÇÃO QUE ESTAVA FALTANDO
-                # ===================================================
                 qtd_entregue_str = dados_recebidos['quantidade_entregue']
-                observacao_texto = dados_recebidos.get('observacao', '')
-                
                 produto['quantidade_entregue'] = qtd_entregue_str
-                produto['observacao'] = observacao_texto
-                
-                # Lógica para definir o status (Confirmado, Corte Total, Corte Parcial)
+                produto['observacao'] = dados_recebidos.get('observacao', '')
                 qtd_pedida_str = produto.get('quantidade_pedida', '0')
                 unidades_pacote = int(produto.get('unidades_pacote', 1))
                 match_pacotes = re.match(r'(\d+)', qtd_pedida_str)
                 pacotes_pedidos = int(match_pacotes.group(1)) if match_pacotes else 0
                 total_unidades_pedidas = pacotes_pedidos * unidades_pacote
-                
                 try:
                     qtd_entregue_int = int(qtd_entregue_str)
-                    if qtd_entregue_int == total_unidades_pedidas:
-                        status_final = "Confirmado"
-                    elif qtd_entregue_int == 0:
-                        status_final = "Corte Total"
-                    else:
-                        status_final = "Corte Parcial"
-                except (ValueError, TypeError):
-                    status_final = "Corte Parcial"
-                
+                    if qtd_entregue_int == total_unidades_pedidas: status_final = "Confirmado"
+                    elif qtd_entregue_int == 0: status_final = "Corte Total"
+                    else: status_final = "Corte Parcial"
+                except (ValueError, TypeError): status_final = "Corte Parcial"
                 produto['status'] = status_final
-                # ===================================================
-                break # Para o loop pois já achamos e atualizamos o produto
-
-        # 3. Verifica se todos os produtos do pedido foram conferidos
+                break
         for produto in produtos_atualizados:
             if produto['status'] == 'Pendente':
                 todos_conferidos = False
                 break
-        
         novo_status_conferencia = 'Finalizado' if todos_conferidos else 'Pendente'
-        
-        # 4. Salva (UPDATE) a lista de produtos e o status da conferência de volta no banco
-        sql_update = """
-            UPDATE pedidos 
-            SET produtos = %s, status_conferencia = %s
-            WHERE numero_pedido = %s;
-        """
-        cur.execute(sql_update, (
-            json.dumps(produtos_atualizados), 
-            novo_status_conferencia,
-            dados_recebidos['pedido_id']
-        ))
-        
+        sql_update = "UPDATE pedidos SET produtos = %s, status_conferencia = %s WHERE numero_pedido = %s;"
+        cur.execute(sql_update, (json.dumps(produtos_atualizados), novo_status_conferencia, dados_recebidos['pedido_id']))
         conn.commit()
         return jsonify({"sucesso": True, "status_final": status_final})
-
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return jsonify({"sucesso": False, "erro": str(e)}), 500
     finally:
-        if conn:
-            cur.close()
-            conn.close()
+        if conn: cur.close(); conn.close()
 
 @app.route('/api/cortes')
 def api_cortes():
-    # Inicializa a estrutura de dados fora do bloco try
     cortes_agrupados = defaultdict(list)
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-        # Busca todos os pedidos, não apenas os finalizados, para depurar
-        cur.execute("SELECT * FROM pedidos;")
+        cur.execute("SELECT * FROM pedidos WHERE status_conferencia = 'Finalizado';")
         pedidos = cur.fetchall()
-
         for pedido in pedidos:
-            # Garantir que 'produtos' e 'nome_da_carga' existam
             produtos = pedido.get('produtos', []) if pedido.get('produtos') is not None else []
+            if not isinstance(produtos, list): continue
             nome_carga = pedido.get('nome_da_carga', 'Sem Carga')
-
-            if not isinstance(produtos, list): continue # Pula se 'produtos' não for uma lista
-
             for produto in produtos:
                 if produto.get('status') in ['Corte Parcial', 'Corte Total']:
-                    item_corte = {
-                        "numero_pedido": pedido.get('numero_pedido'),
-                        "nome_cliente": pedido.get('nome_cliente'),
-                        "vendedor": pedido.get('vendedor'),
-                        "observacao": produto.get('observacao', ''),
-                        "produto": produto
-                    }
+                    item_corte = {"numero_pedido": pedido.get('numero_pedido'), "nome_cliente": pedido.get('nome_cliente'), "vendedor": pedido.get('vendedor'), "observacao": produto.get('observacao', ''), "produto": produto}
                     cortes_agrupados[nome_carga].append(item_corte)
-
-        # A função agora retorna o JSON de sucesso aqui, dentro do try
         return jsonify(cortes_agrupados)
-
     except Exception as e:
-        import traceback
-        # Imprime o erro real no log da Render para podermos ver
-        print("--- ERRO NA API DE CORTES ---")
-        traceback.print_exc()
-        print("-----------------------------")
-        # Retorna um JSON de erro válido em vez de uma página HTML
+        import traceback; traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
     finally:
-        if conn:
-            cur.close()
-            conn.close()
-
+        if conn: cur.close(); conn.close()
+        
 @app.route('/api/gerar-relatorio')
 def gerar_relatorio():
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-        # Busca todos os pedidos no banco de dados
         cur.execute("SELECT * FROM pedidos;")
         pedidos = cur.fetchall()
-
-        if not pedidos:
-            return "Nenhum pedido encontrado para gerar o relatório.", 404
-
+        if not pedidos: return "Nenhum pedido encontrado para gerar o relatório.", 404
         dados_para_excel = []
         for pedido in pedidos:
-            # Garante que 'produtos' é uma lista antes de iterar
             produtos = pedido.get('produtos', []) if pedido.get('produtos') is not None else []
             if not isinstance(produtos, list): continue
-
             for produto in produtos:
                 if produto.get('status') in ['Corte Parcial', 'Corte Total']:
-                    
-                    # =============================================================
-                    # ✅ USANDO A SUA LÓGICA DE CÁLCULO QUE FUNCIONA
-                    # =============================================================
                     try:
-                        # Converte os valores para números, tratando possíveis erros
                         valor_total = float(str(produto.get('valor_total_item', '0')).replace(',', '.'))
                         unidades_pacote = int(produto.get('unidades_pacote', 1))
                         qtd_pedida_str = produto.get('quantidade_pedida', '0')
-                        
                         match = re.match(r'(\d+)', qtd_pedida_str)
                         pacotes_pedidos = int(match.group(1)) if match else 0
-                        
-                        # Evita divisão por zero
                         preco_por_pacote = valor_total / pacotes_pedidos if pacotes_pedidos > 0 else 0
                         preco_unidade = preco_por_pacote / unidades_pacote if unidades_pacote > 0 else 0
-                        
                         unidades_pedidas = pacotes_pedidos * unidades_pacote
-                        
-                        # Garante que a quantidade entregue seja um número
                         qtd_entregue_str = str(produto.get('quantidade_entregue', '0'))
                         unidades_entregues = int(qtd_entregue_str) if qtd_entregue_str.isdigit() else 0
-                        
                         valor_corte = (unidades_pedidas - unidades_entregues) * preco_unidade
-                        
-                        dados_para_excel.append({
-                            'Pedido': pedido.get('numero_pedido'),
-                            'Cliente': pedido.get('nome_cliente'),
-                            'Vendedor': pedido.get('vendedor'),
-                            'Produto': produto.get('produto_nome', ''),
-                            'Quantidade Pedida': produto.get('quantidade_pedida', ''),
-                            'Quantidade Entregue': produto.get('quantidade_entregue', ''),
-                            'Status': produto.get('status', ''),
-                            'Observação': produto.get('observacao', ''),
-                            'Valor Total Item': produto.get('valor_total_item'),
-                            'Valor do Corte Estimado': round(valor_corte, 2)
-                        })
+                        dados_para_excel.append({'Pedido': pedido.get('numero_pedido'), 'Cliente': pedido.get('nome_cliente'), 'Vendedor': pedido.get('vendedor'), 'Produto': produto.get('produto_nome', ''), 'Quantidade Pedida': produto.get('quantidade_pedida', ''), 'Quantidade Entregue': produto.get('quantidade_entregue', ''), 'Status': produto.get('status', ''), 'Observação': produto.get('observacao', ''), 'Valor Total Item': produto.get('valor_total_item'), 'Valor do Corte Estimado': round(valor_corte, 2)})
                     except (ValueError, TypeError, AttributeError) as e:
                         print(f"Erro ao calcular corte para o produto {produto.get('produto_nome', 'N/A')}: {e}")
                         continue
-        
-        if not dados_para_excel:
-            return "Nenhum item com corte encontrado para gerar o relatório."
-
+        if not dados_para_excel: return "Nenhum item com corte encontrado para gerar o relatório."
         df = pd.DataFrame(dados_para_excel)
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Cortes')
-        
-        # Retorna o arquivo Excel para download
-        return Response(
-            output.getvalue(),
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": "attachment;filename=cortes_relatorio.xlsx"}
-        )
-
+        return Response(output.getvalue(), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment;filename=cortes_relatorio.xlsx"})
     except Exception as e:
-        # Bloco except corrigido
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return f"Erro ao gerar relatório: {e}", 500
     finally:
-        if conn:
-            cur.close()
-            conn.close()
+        if conn: cur.close(); conn.close()
 
 @app.route('/api/resetar-dia', methods=['POST'])
 def resetar_dia():
@@ -474,27 +359,14 @@ def resetar_dia():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        
-        # O comando TRUNCATE é mais rápido que DELETE para limpar a tabela inteira
-        # e reinicia a contagem dos IDs.
         cur.execute("TRUNCATE TABLE pedidos RESTART IDENTITY;")
         conn.commit()
-        
-        # Nota: Os arquivos no Cloudinary NÃO serão apagados. 
-        # Isso é uma medida de segurança e evita o uso excessivo da API.
-        # A limpeza no Cloudinary pode ser feita manualmente, se necessário.
-        
         return jsonify({"sucesso": True, "mensagem": "Todos os pedidos foram apagados. O sistema está pronto para um novo dia."})
-
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return jsonify({"sucesso": False, "erro": str(e)}), 500
     finally:
-        if conn:
-            cur.close()
-            conn.close()
-
+        if conn: cur.close(); conn.close()
 
 # =================================================================
 # 5. RODA O APP
