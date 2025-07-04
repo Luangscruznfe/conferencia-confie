@@ -183,9 +183,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         import traceback
         return {
             "erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"
-        }
-
-        }
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
