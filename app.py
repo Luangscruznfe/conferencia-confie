@@ -52,7 +52,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão definitiva com lógica de extração focada em encontrar a quantidade primeiro.
+    Versão corrigida com extração precisa das quantidades.
     """
     try:
         if caminho_do_pdf:
@@ -118,35 +118,58 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
             # ================================================================
-            # ✅ LÓGICA DE EXTRAÇÃO SIMPLIFICADA E FINAL
+            # ✅ LÓGICA DE EXTRAÇÃO CORRIGIDA
             # ================================================================
             for linha in linhas_agrupadas:
                 linha_texto = " ".join([palavra[4] for palavra in linha])
 
+                # Pular linhas de cabeçalho
                 if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']):
                     continue
                 
-                # Encontrar a quantidade primeiro
-                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP)(?:.*)?)', linha_texto)
+                # Remover código do item e código de barras do início (se existirem)
+                linha_limpa = re.sub(r'^\d+\s+\d{13}\s*', '', linha_texto).strip()
+                
+                # Buscar padrão de quantidade mais específico: número + unidade + detalhes
+                # Exemplos: "1 CX C/24 UN", "2 CX C/48 UN", "1 UN", "5 PC"
+                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP)(?:\s+C/\d+\s+UN)?)', linha_limpa)
                 
                 if match_qtd:
                     quantidade_pedida = match_qtd.group(1).strip()
                     # O nome do produto é tudo que vem ANTES da quantidade
-                    nome_produto_final = linha_texto[:match_qtd.start()].strip()
+                    nome_produto_final = linha_limpa[:match_qtd.start()].strip()
                 else:
-                    # Se não encontrar um padrão de quantidade, assume o padrão antigo
-                    partes = linha_texto.split()
-                    if len(partes) > 1:
-                        nome_produto_final = " ".join(partes[:-1])
-                        quantidade_pedida = partes[-1]
+                    # Fallback: buscar apenas por padrões de unidade no final
+                    match_unidade = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP))\s*$', linha_limpa)
+                    if match_unidade:
+                        quantidade_pedida = match_unidade.group(1).strip()
+                        nome_produto_final = linha_limpa[:match_unidade.start()].strip()
                     else:
-                        continue # Pula linhas que não consegue entender
+                        # Se não encontrar padrão específico, tenta divisão por espaços
+                        partes = linha_limpa.split()
+                        if len(partes) >= 2:
+                            # Verifica se as últimas palavras formam uma quantidade
+                            if len(partes) >= 3 and partes[-3:-1] == ['C', 'UN']:
+                                quantidade_pedida = " ".join(partes[-4:]) if len(partes) >= 4 else " ".join(partes[-3:])
+                                nome_produto_final = " ".join(partes[:-4]) if len(partes) >= 4 else " ".join(partes[:-3])
+                            elif partes[-1] in ['CX', 'UN', 'PC', 'FD', 'DP']:
+                                if len(partes) >= 2:
+                                    quantidade_pedida = " ".join(partes[-2:])
+                                    nome_produto_final = " ".join(partes[:-2])
+                                else:
+                                    continue
+                            else:
+                                # Última tentativa: assume que a última palavra é quantidade
+                                quantidade_pedida = partes[-1]
+                                nome_produto_final = " ".join(partes[:-1])
+                        else:
+                            continue
 
-                # Remove o código do item e o código de barras do início, se existirem
-                nome_produto_final = re.sub(r'^\d+\s+\d{13}\s*', '', nome_produto_final).strip()
+                # Validar se conseguiu extrair nome do produto
+                if not nome_produto_final or len(nome_produto_final) < 3:
+                    continue
 
-                if len(nome_produto_final) < 3: continue
-
+                # Extrair unidades por pacote
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
                 if match_unidades:
