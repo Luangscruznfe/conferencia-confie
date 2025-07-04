@@ -53,7 +53,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão com depuração para analisar o processamento de múltiplas páginas.
+    Versão final com correção de sintaxe e depuração para múltiplas páginas.
     """
     try:
         if caminho_do_pdf:
@@ -67,13 +67,27 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         dados_cabecalho = {}
 
         for i, pagina in enumerate(documento):
-            # Adiciona um print para sabermos qual página está sendo processada
             print(f"\n--- DEBUG: PROCESSANDO PÁGINA {i + 1} de {len(documento)} ---")
 
             if i == 0:
+                # =============================================================
+                # ✅ LÓGICA DO CABEÇALHO RESTAURADA AQUI
+                # =============================================================
                 texto_completo_pagina = pagina.get_text("text")
-                # ... (lógica de extração do cabeçalho que já funciona) ...
-                dados_cabecalho = # ... (seus dados do cabeçalho) ...
+                numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
+                if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
+                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
+                vendedor = "N/E"
+                try:
+                    vendedor_rect_list = pagina.search_for("Vendedor")
+                    if vendedor_rect_list:
+                        vendedor_rect = vendedor_rect_list[0]
+                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
+                        vendedor_words = pagina.get_text("words", clip=search_area)
+                        if vendedor_words: vendedor = vendedor_words[0][4]
+                except Exception:
+                    vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
+                dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
             
             # Lógica para definir a área da tabela
             y_inicio, y_fim = 0, pagina.rect.height
@@ -83,7 +97,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 y_inicio = y_inicio_list[0].y1
                 print(f"DEBUG PÁGINA {i+1}: 'ITEM CÓD. BARRAS' encontrado. y_inicio definido como {y_inicio}")
             else:
-                # Para páginas > 1, o topo é geralmente mais alto
                 y_inicio = 40 
                 print(f"DEBUG PÁGINA {i+1}: 'ITEM CÓD. BARRAS' NÃO encontrado. Usando fallback y_inicio = {y_inicio}")
 
@@ -97,15 +110,14 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     y_fim = footer_list[0].y0 - 5
                     print(f"DEBUG PÁGINA {i+1}: 'POR GENTILEZA' encontrado. y_fim definido como {y_fim}")
                 else:
-                    # Se não for a última página, usa a altura toda
                     y_fim = pagina.rect.height - 40 
                     print(f"DEBUG PÁGINA {i+1}: Nenhum rodapé encontrado. Usando altura da página como y_fim = {y_fim}")
 
             palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             print(f"DEBUG PÁGINA {i+1}: {len(palavras_na_tabela)} palavras encontradas na área da tabela.")
 
-            # ... (resto da sua lógica para processar as palavras e extrair os produtos) ...
-            # ... (o código aqui dentro permanece o mesmo) ...
+            # ... (o resto da sua lógica para processar as palavras e extrair os produtos) ...
+            # ... (coloque sua lógica completa de extração aqui) ...
 
         documento.close()
         
