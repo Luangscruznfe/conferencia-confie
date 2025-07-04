@@ -54,7 +54,7 @@ def extrair_campo_regex(pattern, text):
     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
-    """Versão corrigida da extração de PDF - resolve problema do último produto."""
+    """Versão final corrigida - garante que o último produto seja extraído."""
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -86,108 +86,48 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-            # Definir área de extração dos produtos
-            y_inicio, y_fim = 0, pagina.rect.height
-            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            if y_inicio_list:
-                y_inicio = y_inicio_list[0].y1
-            else:
-                y_inicio = 40
-
-            # CORREÇÃO: Melhorar a detecção do fim da tabela
-            y_fim_list = pagina.search_for("TOTAL GERAL")
-            if y_fim_list:
-                y_fim = y_fim_list[0].y0
-            else:
-                # Procurar por outros indicadores de fim da tabela
-                footer_indicators = [
-                    "POR GENTILEZA CONFERIR",
-                    "Vencimentos:",
-                    "Observações:",
-                    "**POR GENTILEZA"
-                ]
-                for indicator in footer_indicators:
-                    footer_list = pagina.search_for(indicator)
-                    if footer_list:
-                        y_fim = footer_list[0].y0 - 5
-                        break
-                else:
-                    # Se não encontrar nenhum indicador, usar quase toda a página
-                    y_fim = pagina.rect.height - 20
-
-            # CORREÇÃO: Verificar se a área é válida antes de continuar
-            if y_inicio >= y_fim - 10:  # Deixar margem mínima
-                continue
+            # ===============================================
+            # NOVA ABORDAGEM: Extrair TUDO e depois filtrar
+            # ===============================================
             
-            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
-            if not palavras_na_tabela: 
-                continue
-
-            palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
-            linhas_agrupadas = []
-            if palavras_na_tabela:
-                linha_atual = [palavras_na_tabela[0]]
-                y_referencia = palavras_na_tabela[0][1]
-                for j in range(1, len(palavras_na_tabela)):
-                    palavra = palavras_na_tabela[j]
-                    if abs(palavra[1] - y_referencia) < 5:
-                        linha_atual.append(palavra)
-                    else:
-                        linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
-                        linha_atual = [palavra]
-                        y_referencia = palavra[1]
-                linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
-
-            for linha in linhas_agrupadas:
-                linha_texto = " ".join([palavra[4] for palavra in linha])
-                
-                # Pular cabeçalhos
-                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']): 
+            # Pegar o texto completo da página
+            texto_completo = pagina.get_text("text")
+            
+            # Dividir em linhas
+            linhas = texto_completo.split('\n')
+            
+            # Encontrar onde começam os produtos
+            inicio_produtos = False
+            
+            for linha in linhas:
+                linha = linha.strip()
+                if not linha:
                     continue
                 
-                # CORREÇÃO: Adicionar filtros para evitar linhas de rodapé
-                if any(rodape in linha_texto.upper() for rodape in ['TOTAL GERAL', 'POR GENTILEZA', 'VENCIMENTOS', 'OBSERVAÇÕES']):
+                # Detectar início da tabela de produtos
+                if "ITEM CÓD. BARRAS" in linha.upper():
+                    inicio_produtos = True
                     continue
                 
-                valor_total_item, quantidade_pedida, nome_produto_final = "0.00", "N/A", linha_texto
+                # Detectar fim da tabela de produtos
+                if any(fim in linha.upper() for fim in ['TOTAL GERAL', 'POR GENTILEZA CONFERIR', 'VENCIMENTOS:']):
+                    break
                 
-                # Extrair valor total
-                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_texto)
-                if match_valor:
-                    valor_total_item = match_valor.group(1).replace('R$', '').strip()
-                    nome_produto_final = nome_produto_final[:match_valor.start()].strip()
-
-                # Extrair quantidade
-                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ).*)', nome_produto_final)
-                if match_qtd:
-                    quantidade_pedida = match_qtd.group(1).strip()
-                    nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
-                
-                # Limpar nome do produto
-                nome_produto_final = re.sub(r'^\d+\s+\d{8,15}\s*', '', nome_produto_final).strip()
-                
-                # CORREÇÃO: Validar se é uma linha de produto válida
-                if len(nome_produto_final) < 3: 
-                    continue
-                
-                # Verificar se tem código de barras (indicador de produto válido)
-                if not re.search(r'\d{8,15}', linha_texto):
-                    continue
-
-                # Extrair unidades do pacote
-                unidades_pacote = 1
-                match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
-                if match_unidades: 
-                    unidades_pacote = int(match_unidades.group(1))
-
-                produtos_finais.append({
-                    "produto_nome": nome_produto_final,
-                    "quantidade_pedida": quantidade_pedida,
-                    "quantidade_entregue": None,
-                    "status": "Pendente",
-                    "valor_total_item": valor_total_item.replace(',', '.'),
-                    "unidades_pacote": unidades_pacote
-                })
+                # Se estamos na seção de produtos, processar linha
+                if inicio_produtos:
+                    # Verificar se a linha tem estrutura de produto
+                    # (número do item + código de barras + quantidade + produto + valores)
+                    if re.search(r'^\d+\s+\d{8,15}\s+\d+\s+(?:UN|CX|PC|FD|DP|CJ)', linha):
+                        produto_info = processar_linha_produto(linha)
+                        if produto_info:
+                            produtos_finais.append(produto_info)
+                    
+                    # CORREÇÃO ESPECÍFICA: Processar linhas que começam com "C/ 12UN18"
+                    # Estas são linhas de continuação que podem ser o último produto
+                    elif re.search(r'^C/\s*\d+UN\d+', linha):
+                        produto_info = processar_linha_produto(linha)
+                        if produto_info:
+                            produtos_finais.append(produto_info)
 
         documento.close()
         
@@ -207,9 +147,80 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
 
 
-# Função adicional para debug - ajuda a identificar problemas
-def debug_extração_pdf(caminho_do_pdf=None, stream=None):
-    """Função para debug da extração - mostra detalhes do processamento."""
+def processar_linha_produto(linha):
+    """Processa uma linha individual de produto."""
+    try:
+        linha = linha.strip()
+        if len(linha) < 10:  # Linha muito curta
+            return None
+        
+        # Extrair valores (sempre no final da linha)
+        valores = []
+        matches_valor = re.findall(r'R\$\s*[\d,]+', linha)
+        if matches_valor:
+            valores = [v.replace('R$', '').strip() for v in matches_valor]
+        
+        valor_total = valores[0] if valores else "0.00"
+        
+        # Remover valores da linha para processar o resto
+        linha_sem_valores = linha
+        for match in matches_valor:
+            linha_sem_valores = linha_sem_valores.replace(match, '')
+        linha_sem_valores = linha_sem_valores.strip()
+        
+        # Extrair quantidade e unidade
+        quantidade_match = re.search(r'(\d+)\s+(UN|CX|PC|FD|DP|CJ)', linha_sem_valores)
+        if quantidade_match:
+            qtd = quantidade_match.group(1)
+            unidade = quantidade_match.group(2)
+            quantidade_pedida = f"{qtd} {unidade}"
+            
+            # Remover quantidade da linha
+            linha_sem_valores = linha_sem_valores[:quantidade_match.start()] + linha_sem_valores[quantidade_match.end():]
+        else:
+            quantidade_pedida = "N/A"
+        
+        # Extrair código de barras (sequência de 8-15 dígitos)
+        codigo_barras_match = re.search(r'\d{8,15}', linha_sem_valores)
+        if codigo_barras_match:
+            # Remover código de barras
+            linha_sem_valores = linha_sem_valores[:codigo_barras_match.start()] + linha_sem_valores[codigo_barras_match.end():]
+        
+        # Remover número do item no início (se houver)
+        linha_sem_valores = re.sub(r'^\d+\s+', '', linha_sem_valores)
+        
+        # Remover padrão "C/ XUN" do início se houver
+        linha_sem_valores = re.sub(r'^C/\s*\d+UN\d+\s*', '', linha_sem_valores)
+        
+        # O que sobra é o nome do produto
+        nome_produto = linha_sem_valores.strip()
+        
+        # Validar se tem nome de produto válido
+        if len(nome_produto) < 3:
+            return None
+            
+        # Extrair unidades do pacote
+        unidades_pacote = 1
+        match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
+        if match_unidades:
+            unidades_pacote = int(match_unidades.group(1))
+        
+        return {
+            "produto_nome": nome_produto,
+            "quantidade_pedida": quantidade_pedida,
+            "quantidade_entregue": None,
+            "status": "Pendente",
+            "valor_total_item": valor_total.replace(',', '.'),
+            "unidades_pacote": unidades_pacote
+        }
+        
+    except Exception as e:
+        print(f"Erro ao processar linha: {linha} - {e}")
+        return None
+
+
+def debug_linhas_pdf(caminho_do_pdf=None, stream=None):
+    """Debug específico para ver todas as linhas do PDF."""
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -220,26 +231,26 @@ def debug_extração_pdf(caminho_do_pdf=None, stream=None):
 
         for i, pagina in enumerate(documento):
             print(f"\n=== PÁGINA {i+1} ===")
+            texto_completo = pagina.get_text("text")
+            linhas = texto_completo.split('\n')
             
-            # Encontrar limites da tabela
-            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            y_fim_list = pagina.search_for("TOTAL GERAL")
-            
-            y_inicio = y_inicio_list[0].y1 if y_inicio_list else 40
-            y_fim = y_fim_list[0].y0 if y_fim_list else pagina.rect.height - 20
-            
-            print(f"Y início: {y_inicio}, Y fim: {y_fim}")
-            
-            # Extrair palavras na área da tabela
-            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
-            print(f"Palavras encontradas: {len(palavras_na_tabela)}")
-            
-            # Mostrar últimas 5 linhas encontradas
-            if palavras_na_tabela:
-                palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
-                print("\nÚltimas 5 linhas de palavras:")
-                for palavra in palavras_na_tabela[-15:]:
-                    print(f"Y: {palavra[1]:.1f}, X: {palavra[0]:.1f}, Texto: '{palavra[4]}'")
+            inicio_produtos = False
+            for num_linha, linha in enumerate(linhas):
+                linha = linha.strip()
+                if not linha:
+                    continue
+                
+                if "ITEM CÓD. BARRAS" in linha.upper():
+                    inicio_produtos = True
+                    print(f"--- INÍCIO DOS PRODUTOS (linha {num_linha}) ---")
+                    continue
+                
+                if any(fim in linha.upper() for fim in ['TOTAL GERAL', 'POR GENTILEZA CONFERIR', 'VENCIMENTOS:']):
+                    print(f"--- FIM DOS PRODUTOS (linha {num_linha}) ---")
+                    break
+                
+                if inicio_produtos:
+                    print(f"Linha {num_linha}: {linha}")
         
         documento.close()
         
