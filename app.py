@@ -453,7 +453,7 @@ def gerar_relatorio():
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # Busca todos os pedidos para gerar o relatório
+        # Busca todos os pedidos no banco de dados online
         cur.execute("SELECT * FROM pedidos;")
         pedidos = cur.fetchall()
 
@@ -462,54 +462,51 @@ def gerar_relatorio():
 
         dados_para_excel = []
         for pedido in pedidos:
+            # Garante que 'produtos' é uma lista antes de iterar
             produtos = pedido.get('produtos', []) if pedido.get('produtos') is not None else []
             if not isinstance(produtos, list): continue
 
             for produto in produtos:
                 if produto.get('status') in ['Corte Parcial', 'Corte Total']:
                     
-                    # ================================================
-                    # ✅ LÓGICA DE CÁLCULO DO VALOR DO CORTE ADICIONADA
-                    # ================================================
-                    valor_corte = 0.0
+                    # =============================================================
+                    # ✅ USANDO A SUA LÓGICA DE CÁLCULO QUE FUNCIONA
+                    # =============================================================
                     try:
-                        # Converte os valores para números, tratando possíveis erros
-                        valor_total_item_str = str(produto.get('valor_total_item', '0')).replace(',', '.')
-                        valor_total = float(valor_total_item_str)
+                        valor_total = float(str(produto.get('valor_total_item', '0')).replace(',', '.'))
                         unidades_pacote = int(produto.get('unidades_pacote', 1))
                         qtd_pedida_str = produto.get('quantidade_pedida', '0')
                         
-                        # Extrai o número de pacotes da string de quantidade
                         match = re.match(r'(\d+)', qtd_pedida_str)
                         pacotes_pedidos = int(match.group(1)) if match else 0
                         
+                        # Evita divisão por zero
+                        preco_por_pacote = valor_total / pacotes_pedidos if pacotes_pedidos > 0 else 0
+                        preco_unidade = preco_por_pacote / unidades_pacote if unidades_pacote > 0 else 0
+                        
                         unidades_pedidas = pacotes_pedidos * unidades_pacote
                         
-                        # Garante que temos um valor numérico para a quantidade entregue
                         qtd_entregue_str = str(produto.get('quantidade_entregue', '0'))
                         unidades_entregues = int(qtd_entregue_str) if qtd_entregue_str.isdigit() else 0
                         
-                        # Evita divisão por zero
-                        if unidades_pedidas > 0:
-                            preco_unidade = valor_total / unidades_pedidas
-                            valor_corte = (unidades_pedidas - unidades_entregues) * preco_unidade
+                        valor_corte = (unidades_pedidas - unidades_entregues) * preco_unidade
                         
+                        dados_para_excel.append({
+                            'Pedido': pedido.get('numero_pedido'),
+                            'Cliente': pedido.get('nome_cliente'),
+                            'Vendedor': pedido.get('vendedor'),
+                            'Produto': produto.get('produto_nome', ''),
+                            'Quantidade Pedida': produto.get('quantidade_pedida', ''),
+                            'Quantidade Entregue': produto.get('quantidade_entregue', ''),
+                            'Status': produto.get('status', ''),
+                            'Observação': produto.get('observacao', ''),
+                            'Valor Total Item': produto.get('valor_total_item'),
+                            'Valor do Corte Estimado': round(valor_corte, 2)
+                        })
                     except (ValueError, TypeError, AttributeError) as e:
                         print(f"Erro ao calcular corte para o produto {produto.get('produto_nome', 'N/A')}: {e}")
-                        valor_corte = 0.0 # Se der erro, o valor do corte será 0
-
-                    dados_para_excel.append({
-                        'Pedido': pedido.get('numero_pedido'),
-                        'Cliente': pedido.get('nome_cliente'),
-                        'Vendedor': pedido.get('vendedor'),
-                        'Produto': produto.get('produto_nome', ''),
-                        'Quantidade Pedida': produto.get('quantidade_pedida', ''),
-                        'Quantidade Entregue': produto.get('quantidade_entregue', ''),
-                        'Status': produto.get('status', ''),
-                        'Observação': produto.get('observacao', ''),
-                        'Valor do Corte Estimado': round(valor_corte, 2)
-                    })
-
+                        continue
+        
         if not dados_para_excel:
             return "Nenhum item com corte encontrado para gerar o relatório."
 
@@ -518,7 +515,6 @@ def gerar_relatorio():
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Cortes')
         
-        # Retorna o arquivo Excel para download
         return Response(
             output.getvalue(),
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -533,7 +529,6 @@ def gerar_relatorio():
         if conn:
             cur.close()
             conn.close()
-
 # =================================================================
 # 5. RODA O APP
 # =================================================================
