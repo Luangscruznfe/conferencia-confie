@@ -49,9 +49,9 @@ def extrair_campo_regex(pattern, text):
     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
-    """
-    Extrai os dados do pedido de um PDF, incluindo produtos mesmo que estejam após o "TOTAL GERAL" em outra página.
-    """
+    
+    #Extrai os dados do pedido de um PDF, incluindo produtos mesmo que estejam após o "TOTAL GERAL" em outra página.
+    
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
