@@ -88,33 +88,41 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     "vendedor": vendedor
                 }
 
+            # --- EXTRAÇÃO DA TABELA (COM CORREÇÕES) ---
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
             y_inicio = y_inicio_list[0].y1 if y_inicio_list else 40
 
             footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
             if footer_list:
-                y_fim = footer_list[0].y1 + 50  # Inclui conteúdo abaixo do rodapé
+                footer_y = footer_list[0].y1
+                y_fim = max(footer_y + 150, y_inicio + 100)  # Margem segura
             else:
                 y_fim = pagina.rect.height
 
-            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
-            if not palavras_na_tabela:
-                continue
+            print(f"DEBUG: Página {i+1} - Buscando entre Y={y_inicio} e Y={y_fim}")
 
+            palavras_na_tabela = [p for p in pagina.get_text("words") if y_inicio <= p[1] <= y_fim]
+            if not palavras_na_tabela:
+                continue  # Pula para a próxima página se não encontrar palavras
+
+            # Agrupamento por linhas
             palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
             linhas_agrupadas = []
             linha_atual = [palavras_na_tabela[0]]
             y_referencia = palavras_na_tabela[0][1]
+
             for j in range(1, len(palavras_na_tabela)):
                 palavra = palavras_na_tabela[j]
-                if abs(palavra[1] - y_referencia) < 5:
+                if abs(palavra[1] - y_referencia) < 5:  # Mesma linha
                     linha_atual.append(palavra)
                 else:
                     linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
                     linha_atual = [palavra]
                     y_referencia = palavra[1]
-            linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
+            linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))  # Última linha
+
+            # Processamento dos produtos
             for linha in linhas_agrupadas:
                 linha_texto = " ".join([palavra[4] for palavra in linha])
                 if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS', 'TOTAL GERAL']):
@@ -169,8 +177,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         return {
             "erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"
         }
-
-
 
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
