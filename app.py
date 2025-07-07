@@ -50,7 +50,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão corrigida que extrai corretamente as quantidades dos produtos.
+    Versão específica para o formato do PDF analisado - extrai quantidades corretamente.
     """
     try:
         if caminho_do_pdf:
@@ -99,13 +99,13 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         
         texto_completo = " ".join([w[4] for w in todas_as_palavras])
         
-        # ETAPA 2: Parser Anti-Caos CORRIGIDO
+        # ETAPA 2: Parser específico para o formato do PDF
         produtos_finais = []
         # Limpa o rodapé antes de começar
         if "TOTAL GERAL:" in texto_completo:
             texto_completo = texto_completo.split("TOTAL GERAL:")[0]
 
-        # Usa a divisão confiável que sempre funcionou
+        # Divide por linhas de produto usando o padrão: ITEM + CÓDIGO_BARRAS
         produtos_brutos = re.split(r'(?=\d{1,3}\s+\d{12,14})', texto_completo)
 
         for produto_str in produtos_brutos:
@@ -114,57 +114,68 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             if not re.match(r'^\d{1,3}\s+\d{12,14}', linha):
                 continue
 
-            # Extrai o ID e o código de barras
-            match_inicial = re.match(r'^(\d+)\s+(\d{12,14})\s*(.*)', linha)
+            # Analisando o padrão específico do PDF:
+            # ITEM CÓD_BARRAS [C/XXUN] QUANTIDADE UNIDADE R$ VALOR_UNIT R$ VALOR_TOTAL NOME_PRODUTO
+            
+            # Extrai partes básicas
+            match_inicial = re.match(r'^(\d+)\s+(\d{12,14})\s+(.*)', linha)
             if not match_inicial: continue
             
             item_id = match_inicial.group(1)
             codigo_barras = match_inicial.group(2)
-            resto_str = match_inicial.group(3)
+            resto = match_inicial.group(3)
             
-            # Remove os preços do final
-            precos = re.findall(r'R\$\s*[\d,.]+', resto_str)
+            # Remove valores monetários
+            precos = re.findall(r'R\$\s*[\d,.]+', resto)
             valor_total_item = "0.00"
             if precos:
                 valor_total_item = precos[-1].replace('R$', '').strip()
             
-            # Remove todos os preços da string
-            temp_str = re.sub(r'R\$\s*[\d,.]+', '', resto_str).strip()
+            # Remove todos os preços
+            sem_precos = re.sub(r'R\$\s*[\d,.]+', '', resto).strip()
             
-            # NOVA LÓGICA: Identifica padrões específicos de quantidade
+            # Processa a linha baseado no padrão específico observado
             quantidade_pedida = "1"
             unidades_pacote = 1
-            nome_produto_final = temp_str
+            nome_produto_final = ""
             
-            # Padrão 1: Quantidade simples no início (ex: "1 UN", "2 UN", "4 UN")
-            match_qtd_simples = re.match(r'^(\d+)\s+(UN|CX|PC|FD|DP|CJ|ED)\s+(.*)', temp_str, re.IGNORECASE)
-            if match_qtd_simples:
-                quantidade_pedida = match_qtd_simples.group(1)
-                unidade = match_qtd_simples.group(2)
-                nome_produto_final = match_qtd_simples.group(3)
+            # Padrão 1: Linha com informação de embalagem no início (ex: "C/ 21UN 1 DP CHICLE TRIDENT...")
+            match_embalagem_inicio = re.match(r'^C/\s*(\d+)UN\s+(\d+)\s+(DP|FD|CJ|UN|CX|PC|ED)\s+(.*)', sem_precos, re.IGNORECASE)
+            if match_embalagem_inicio:
+                unidades_pacote = int(match_embalagem_inicio.group(1))
+                quantidade_pedida = match_embalagem_inicio.group(2)
+                unidade = match_embalagem_inicio.group(3)
+                nome_produto_final = match_embalagem_inicio.group(4)
             else:
-                # Padrão 2: Informação de embalagem no início (ex: "C/ 21UN", "C/ 20UN")
-                match_embalagem = re.match(r'^C/\s*(\d+)UN\s+(.*)', temp_str, re.IGNORECASE)
-                if match_embalagem:
-                    # A informação C/XXX indica unidades por embalagem, não quantidade pedida
-                    unidades_pacote = int(match_embalagem.group(1))
-                    resto_após_embalagem = match_embalagem.group(2)
-                    
-                    # Procura pela quantidade real após a informação de embalagem
-                    match_qtd_real = re.match(r'^(\d+)\s+(UN|CX|PC|FD|DP|CJ|ED)\s+(.*)', resto_após_embalagem, re.IGNORECASE)
-                    if match_qtd_real:
-                        quantidade_pedida = match_qtd_real.group(1)
-                        nome_produto_final = match_qtd_real.group(3)
-                    else:
-                        # Se não encontrar quantidade explícita, assume 1
-                        quantidade_pedida = "1"
-                        nome_produto_final = resto_após_embalagem
+                # Padrão 2: Linha sem informação de embalagem no início (ex: "1 UN BALA 7 BELO...")
+                match_qtd_simples = re.match(r'^(\d+)\s+(UN|CX|PC|FD|DP|CJ|ED)\s+(.*)', sem_precos, re.IGNORECASE)
+                if match_qtd_simples:
+                    quantidade_pedida = match_qtd_simples.group(1)
+                    unidade = match_qtd_simples.group(2)
+                    nome_produto_final = match_qtd_simples.group(3)
                 else:
-                    # Padrão 3: Apenas nome do produto (quantidade implícita = 1)
-                    # Remove possíveis unidades soltas no início
-                    temp_str_limpo = re.sub(r'^(UN|CX|PC|FD|DP|CJ|ED)\s+', '', temp_str, flags=re.IGNORECASE)
-                    nome_produto_final = temp_str_limpo
-                    quantidade_pedida = "1"
+                    # Padrão 3: Linha com embalagem no meio/final (ex: "CHICLE POOSH HORTELA 200G C/40")
+                    # Primeiro extrai informação de embalagem se existir
+                    match_embalagem_meio = re.search(r'C/\s*(\d+)(?:UN)?\b', sem_precos, re.IGNORECASE)
+                    if match_embalagem_meio:
+                        unidades_pacote = int(match_embalagem_meio.group(1))
+                        # Remove a informação de embalagem
+                        sem_embalagem = re.sub(r'C/\s*\d+(?:UN)?\b', '', sem_precos, flags=re.IGNORECASE).strip()
+                    else:
+                        sem_embalagem = sem_precos
+                    
+                    # Procura quantidade no início da string limpa
+                    match_qtd_inicio = re.match(r'^(\d+)\s+(UN|CX|PC|FD|DP|CJ|ED)\s+(.*)', sem_embalagem, re.IGNORECASE)
+                    if match_qtd_inicio:
+                        quantidade_pedida = match_qtd_inicio.group(1)
+                        nome_produto_final = match_qtd_inicio.group(3)
+                    else:
+                        # Se não encontrar quantidade específica, assume 1 e pega todo o texto como nome
+                        quantidade_pedida = "1"
+                        # Remove possíveis unidades soltas no início
+                        nome_produto_final = re.sub(r'^(UN|CX|PC|FD|DP|CJ|ED)\s+', '', sem_embalagem, flags=re.IGNORECASE).strip()
+                        if not nome_produto_final:
+                            nome_produto_final = sem_embalagem
             
             # Limpa o nome do produto
             nome_produto_final = nome_produto_final.strip()
@@ -174,10 +185,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 continue
 
             # Formata a quantidade para exibição
-            if quantidade_pedida.isdigit() and int(quantidade_pedida) > 1:
-                quantidade_display = f"{quantidade_pedida} UN"
-            else:
-                quantidade_display = "1 UN"
+            quantidade_display = f"{quantidade_pedida} UN"
             
             produtos_finais.append({
                 "produto_nome": nome_produto_final,
