@@ -50,7 +50,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão definitiva com arquitetura de reconstrução de linhas baseada em coordenadas.
+    Versão final que aceita a extração caótica de texto e usa um parser resiliente para extrair os dados.
     """
     try:
         if caminho_do_pdf:
@@ -92,63 +92,62 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         except Exception: pass
         dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-        # --- NOVA ARQUITETURA DE EXTRAÇÃO DE PRODUTOS ---
-        produtos_finais = []
-        
-        # 1. Coleta todas as palavras de todas as páginas com suas coordenadas
+        # ETAPA 1: Abordagem de Força Bruta para garantir a leitura de todas as páginas
         todas_as_palavras = []
         for page in documento:
             todas_as_palavras.extend(page.get_text("words"))
+        
+        texto_completo = " ".join([w[4] for w in todas_as_palavras])
+        
+        # ETAPA 2: Parser Anti-Caos
+        produtos_finais = []
+        # Limpa o rodapé antes de começar
+        if "TOTAL GERAL:" in texto_completo:
+            texto_completo = texto_completo.split("TOTAL GERAL:")[0]
 
-        # 2. Agrupa palavras em linhas baseadas na coordenada vertical (y0)
-        linhas = defaultdict(list)
-        for w in todas_as_palavras:
-            # A chave é a coordenada y0 arredondada, para agrupar palavras na mesma linha
-            linhas[round(w[1])].append(w)
+        # Usa a divisão confiável que sempre funcionou
+        produtos_brutos = re.split(r'(?=\d{1,3}\s+\d{12,14})', texto_completo)
 
-        # 3. Reconstrói cada linha, ordenando as palavras pela coordenada horizontal (x0)
-        linhas_reconstruidas = []
-        for y in sorted(linhas.keys()):
-            palavras_ordenadas = sorted(linhas[y], key=lambda w: w[0])
-            linha_texto = " ".join([palavra[4] for palavra in palavras_ordenadas])
-            linhas_reconstruidas.append(linha_texto)
-            
-        # 4. Analisa as linhas reconstruídas para encontrar e processar os produtos
-        for linha in linhas_reconstruidas:
-            # Um produto é identificado se a linha começa com [item] [código de barras]
-            match_produto = re.search(r'^\d{1,3}\s+\d{12,14}', linha)
-            if not match_produto:
+        for produto_str in produtos_brutos:
+            linha = produto_str.strip()
+            # Filtra lixo e linhas que não são produtos
+            if not re.match(r'^\d{1,3}\s+\d{12,14}', linha):
                 continue
 
-            linha = linha.strip()
+            # Extrai o ID e o código de barras, deixando o resto para análise
             match_id = re.match(r'^\d+\s+[0-9]{12,14}\s*(.*)', linha)
             if not match_id: continue
             
             resto_str = match_id.group(1)
+            
+            # Caça e remove os preços
             precos = re.findall(r'R\$\s*[\d,.]+', resto_str)
             valor_total_item = "0.00"
             if precos:
                 valor_total_item = precos[-1].replace('R$', '').strip()
-            
             temp_str = re.sub(r'R\$\s*[\d,.]+', '', resto_str).strip()
             
+            # Caça e remove a quantidade
             palavras_temp = temp_str.split()
             indice_nome = 0
-            quantidade_pedida = "N/A"
+            # Define o que é considerado uma "palavra de quantidade"
+            padrao_qtd = r'(UN|CX|PC|FD|DP|CJ|ED|C/|C/\d+(?:UN)?|[0-9.,]+)'
+            
             for i, palavra in enumerate(palavras_temp):
-                if not re.fullmatch(r'(UN|CX|PC|FD|DP|CJ|ED|C/|C/\d+|[0-9.,]+)', palavra, re.IGNORECASE):
+                if not re.fullmatch(padrao_qtd, palavra, re.IGNORECASE):
                     indice_nome = i
                     break
+            else: # Se o loop terminar sem break, toda a linha é quantidade (caso raro)
+                indice_nome = len(palavras_temp)
+
+            quantidade_pedida = " ".join(palavras_temp[:indice_nome])
+            nome_produto_final = " ".join(palavras_temp[indice_nome:])
             
-            if indice_nome > 0 or (len(palavras_temp) > 0 and re.fullmatch(r'(UN|CX|PC|FD|DP|CJ|ED|C/|C/\d+|[0-9.,]+)', palavras_temp[0], re.IGNORECASE)):
-                 # Caso especial: se a linha inteira for quantidade
-                if indice_nome == 0: indice_nome = len(palavras_temp)
-                quantidade_pedida = " ".join(palavras_temp[:indice_nome])
-                nome_produto_final = " ".join(palavras_temp[indice_nome:])
-            else:
+            if not nome_produto_final and quantidade_pedida:
+                # Caso o nome tenha sido confundido com a quantidade
+                nome_produto_final = quantidade_pedida
                 quantidade_pedida = "N/A"
-                nome_produto_final = temp_str
-            
+
             if len(nome_produto_final) < 3: continue
 
             unidades_pacote = 1
@@ -170,7 +169,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
     except Exception as e:
         import traceback
         return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
-
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
     conn = get_db_connection()
