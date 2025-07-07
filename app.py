@@ -50,7 +50,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão original com a correção mínima para ler múltiplas páginas.
+    Versão original com a correção para ler múltiplas páginas e com prints de depuração.
     """
     try:
         if caminho_do_pdf:
@@ -63,7 +63,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         dados_cabecalho = {}
         todas_as_palavras_da_tabela = []
 
-        # ETAPA 1: CORRIGIDO PARA LER TODAS AS PÁGINAS DE PRODUTOS
         for i, pagina in enumerate(documento):
             if i == 0:
                 texto_completo_pagina = pagina.get_text("text")
@@ -82,15 +81,11 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-            # --- Início da Alteração Mínima ---
-            
-            # 1. Define os limites da área de produtos para a página atual
             y_inicio = 40
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
             if y_inicio_list: y_inicio = y_inicio_list[0].y1
             
             y_fim = pagina.rect.height - 40
-            # Corrigido para buscar "TOTAL GERAL:" com os dois pontos
             y_fim_list = pagina.search_for("TOTAL GERAL:")
             if y_fim_list:
                 y_fim = y_fim_list[0].y0
@@ -98,17 +93,13 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
                 if footer_list: y_fim = footer_list[0].y0 - 5
             
-            # 2. Extrai as palavras da área definida e adiciona à lista principal
             palavras_pagina = [p[4] for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             todas_as_palavras_da_tabela.extend(palavras_pagina)
-
-            # 3. SÓ DEPOIS de extrair, verifica se deve parar
             if y_fim_list:
                 break
-            
-            # --- Fim da Alteração Mínima ---
 
-        # ETAPA 2: PROCESSAR A LISTA UNIFICADA DE PALAVRAS (SUA LÓGICA ORIGINAL)
+        print(f"--- DEBUG: Coleta finalizada. Total de palavras coletadas: {len(todas_as_palavras_da_tabela)}")
+
         produtos_finais = []
         if todas_as_palavras_da_tabela:
             buffer_de_produto = []
@@ -123,7 +114,12 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             if buffer_de_produto:
                 produtos_brutos.append(" ".join(buffer_de_produto))
 
-            for produto_str in produtos_brutos:
+            print(f"--- DEBUG: Total de produtos brutos (lógica original): {len(produtos_brutos)}")
+            print(f"--- DEBUG: Amostra dos produtos brutos: {produtos_brutos[:5]}")
+
+            for i, produto_str in enumerate(produtos_brutos):
+                print(f"\n--- DEBUG: Processando produto bruto #{i}: '{produto_str[:100].strip()}'")
+
                 linha_limpa = re.sub(r'^\d+\s', '', produto_str).strip()
                 valor_total_item, quantidade_pedida, nome_produto_final = "0.00", "N/A", linha_limpa
 
@@ -131,6 +127,8 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 if match_valor:
                     valor_total_item = match_valor.group(1).replace('R$', '').strip()
                     nome_produto_final = nome_produto_final[:match_valor.start()].strip()
+                else:
+                    print(f"--- DEBUG: AVISO! Preço não encontrado no final da linha.")
 
                 match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ).*)', nome_produto_final)
                 if match_qtd:
@@ -138,23 +136,32 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
                 
                 nome_produto_final = re.sub(r'^\d{8,15}\s*', '', nome_produto_final).strip()
-                if len(nome_produto_final) < 3: continue
+                
+                print(f"--- DEBUG: Nome final do produto antes do filtro: '{nome_produto_final}'")
+                
+                if len(nome_produto_final) < 3:
+                    print("--- DEBUG: Nome muito curto. Pulando.")
+                    continue
 
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
                 if match_unidades: unidades_pacote = int(match_unidades.group(1))
 
+                print(f"--- DEBUG: SUCESSO! Produto '{nome_produto_final}' foi adicionado.")
                 produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote})
         
         documento.close()
         
+        print(f"--- DEBUG: Final da função. Total de produtos finais: {len(produtos_finais)}")
         if not produtos_finais: 
+            print("--- DEBUG: Nenhum produto encontrado. Retornando erro.")
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
         
         return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
 
     except Exception as e:
         import traceback
+        print(f"--- DEBUG: OCORREU UMA EXCEÇÃO CRÍTICA: {str(e)}")
         return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
 
 def salvar_no_banco_de_dados(dados_do_pedido):
