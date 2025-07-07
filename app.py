@@ -49,6 +49,10 @@ def extrair_campo_regex(pattern, text):
     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
+    """
+    Versão final com nova estratégia de extração baseada em gatilhos (código de barras)
+    para máxima robustez em diferentes ambientes.
+    """
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -64,75 +68,64 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             if i == 0:
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
-                if numero_pedido == "N/E":
-                    numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
+                if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
                 nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
                 vendedor = "N/E"
                 try:
                     vendedor_rect_list = pagina.search_for("Vendedor")
                     if vendedor_rect_list:
                         vendedor_rect = vendedor_rect_list[0]
-                        search_area = fitz.Rect(
-                            vendedor_rect.x0 - 15, vendedor_rect.y1,
-                            vendedor_rect.x1 + 15, vendedor_rect.y1 + 20
-                        )
+                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
                         vendedor_words = pagina.get_text("words", clip=search_area)
-                        if vendedor_words:
-                            vendedor = vendedor_words[0][4]
+                        if vendedor_words: vendedor = vendedor_words[0][4]
                 except Exception:
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
+                dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-                dados_cabecalho = {
-                    "numero_pedido": numero_pedido,
-                    "nome_cliente": nome_cliente,
-                    "vendedor": vendedor
-                }
-
-            # --- EXTRAÇÃO DA TABELA (COM CORREÇÕES) ---
+            y_inicio, y_fim = 0, pagina.rect.height
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            y_inicio = y_inicio_list[0].y1 if y_inicio_list else 40
-
-            footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-            if footer_list:
-                footer_y = footer_list[0].y1
-                y_fim = max(footer_y + 150, y_inicio + 100)  # Margem segura
+            if y_inicio_list: y_inicio = y_inicio_list[0].y1
+            else: y_inicio = 40
+            
+            y_fim_list = pagina.search_for("TOTAL GERAL")
+            if y_fim_list: y_fim = y_fim_list[0].y0
             else:
-                y_fim = pagina.rect.height
+                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
+                if footer_list: y_fim = footer_list[0].y0 - 5
+                else: y_fim = pagina.rect.height - 40
+            
+            if y_inicio >= y_fim: continue
 
-            print(f"DEBUG: Página {i+1} - Buscando entre Y={y_inicio} e Y={y_fim}")
+            palavras_na_tabela = [p[4] for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
+            if not palavras_na_tabela: continue
 
-            palavras_na_tabela = [p for p in pagina.get_text("words") if y_inicio <= p[1] <= y_fim]
-            if not palavras_na_tabela:
-                continue  # Pula para a próxima página se não encontrar palavras
+            # Nova lógica: encontrar produtos baseados em gatilhos
+            buffer_de_produto = []
+            produtos_brutos = []
+            
+            for palavra in palavras_na_tabela:
+                # Gatilho: um código de barras (12-14 dígitos) sinaliza um novo produto
+                if re.match(r'^\d{12,14}$', palavra) and buffer_de_produto:
+                    # Encontrou um novo produto, então salva o anterior
+                    produtos_brutos.append(" ".join(buffer_de_produto))
+                    buffer_de_produto = [] # Limpa para o novo produto
+                
+                buffer_de_produto.append(palavra)
+            
+            # Adiciona o último produto do buffer
+            if buffer_de_produto:
+                produtos_brutos.append(" ".join(buffer_de_produto))
 
-            # Agrupamento por linhas
-            palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
-            linhas_agrupadas = []
-            linha_atual = [palavras_na_tabela[0]]
-            y_referencia = palavras_na_tabela[0][1]
-
-            for j in range(1, len(palavras_na_tabela)):
-                palavra = palavras_na_tabela[j]
-                if abs(palavra[1] - y_referencia) < 5:  # Mesma linha
-                    linha_atual.append(palavra)
-                else:
-                    linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
-                    linha_atual = [palavra]
-                    y_referencia = palavra[1]
-
-            linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))  # Última linha
-
-            # Processamento dos produtos
-            for linha in linhas_agrupadas:
-                linha_texto = " ".join([palavra[4] for palavra in linha])
-                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS', 'TOTAL GERAL']):
-                    continue
-
+            # Agora processa cada string de produto completa
+            for produto_str in produtos_brutos:
+                # Remove o código do item inicial (ex: "5 789...")
+                linha_limpa = re.sub(r'^\d+\s', '', produto_str).strip()
+                
                 valor_total_item = "0.00"
                 quantidade_pedida = "N/A"
-                nome_produto_final = linha_texto
+                nome_produto_final = linha_limpa
 
-                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_texto)
+                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_limpa)
                 if match_valor:
                     valor_total_item = match_valor.group(1).replace('R$', '').strip()
                     nome_produto_final = nome_produto_final[:match_valor.start()].strip()
@@ -141,42 +134,26 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 if match_qtd:
                     quantidade_pedida = match_qtd.group(1).strip()
                     nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
-
-                nome_produto_final = re.sub(r'^\d+\s+\d{8,15}\s*', '', nome_produto_final).strip()
-                if len(nome_produto_final) < 3:
-                    continue
+                
+                nome_produto_final = re.sub(r'^\d{8,15}\s*', '', nome_produto_final).strip()
+                if len(nome_produto_final) < 3: continue
 
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
-                if match_unidades:
-                    unidades_pacote = int(match_unidades.group(1))
+                if match_unidades: unidades_pacote = int(match_unidades.group(1))
 
-                produtos_finais.append({
-                    "produto_nome": nome_produto_final,
-                    "quantidade_pedida": quantidade_pedida,
-                    "quantidade_entregue": None,
-                    "status": "Pendente",
-                    "valor_total_item": valor_total_item.replace(',', '.'),
-                    "unidades_pacote": unidades_pacote
-                })
-
+                produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote})
+        
         documento.close()
-        if not produtos_finais:
+        
+        if not produtos_finais: 
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
-
-        return {
-            **dados_cabecalho,
-            "produtos": produtos_finais,
-            "status_conferencia": "Pendente",
-            "nome_da_carga": nome_da_carga,
-            "nome_arquivo": nome_arquivo
-        }
+        
+        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
 
     except Exception as e:
         import traceback
-        return {
-            "erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"
-        }
+        return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
 
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
