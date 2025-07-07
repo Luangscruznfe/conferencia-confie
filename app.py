@@ -50,7 +50,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão final com extração de cabeçalho correta e abordagem de "força bruta" para garantir a leitura de múltiplas páginas.
+    Versão final com todas as correções de cabeçalho, multipágina e parsing de quantidade.
     """
     try:
         if caminho_do_pdf:
@@ -60,16 +60,11 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         else:
             return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
 
-        # Adicionado print para verificar o número de páginas que o Fitz está vendo
-        print(f"--- DEBUG: Documento aberto. Número de páginas: {len(documento)}")
-
         dados_cabecalho = {}
         todas_as_palavras_da_tabela = []
 
         for i, pagina in enumerate(documento):
-            print(f"--- DEBUG: Lendo palavras da página {i + 1}")
             if i == 0:
-                # Extração de cabeçalho está funcionando bem, mantemos como está
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 nome_cliente = "N/E"
@@ -97,17 +92,19 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 except Exception: pass
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
             
-            # --- ABORDAGEM DE FORÇA BRUTA ---
-            # Simplesmente pega TODAS as palavras da página. A Etapa 2 vai filtrar.
             palavras_pagina = [p[4] for p in pagina.get_text("words")]
             todas_as_palavras_da_tabela.extend(palavras_pagina)
 
-        print(f"--- DEBUG: Leitura de todas as páginas concluída. Total de palavras: {len(todas_as_palavras_da_tabela)}")
-        
-        # ETAPA 2: PROCESSAR PRODUTOS (Usa a lógica robusta que já funciona)
+        # ETAPA 2: PROCESSAR PRODUTOS
         produtos_finais = []
         if todas_as_palavras_da_tabela:
             texto_completo = " ".join(todas_as_palavras_da_tabela)
+
+            # --- CORREÇÃO FINAL: Corta o lixo do rodapé fora ---
+            if "TOTAL GERAL:" in texto_completo:
+                texto_completo = texto_completo.split("TOTAL GERAL:")[0]
+            # --- FIM DA CORREÇÃO FINAL ---
+
             produtos_brutos = re.split(r'(?=\d{1,3}\s+\d{12,14})', texto_completo)
 
             for produto_str in produtos_brutos:
@@ -153,6 +150,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
     except Exception as e:
         import traceback
         return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
+
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
     conn = get_db_connection()
