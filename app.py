@@ -50,7 +50,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão original com a correção para ler múltiplas páginas e com prints de depuração.
+    Versão definitiva com parseador de dados reescrito baseado na estrutura real do PDF.
     """
     try:
         if caminho_do_pdf:
@@ -63,12 +63,15 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         dados_cabecalho = {}
         todas_as_palavras_da_tabela = []
 
+        # ETAPA 1: COLETAR TODAS AS PALAVRAS (Correto)
         for i, pagina in enumerate(documento):
             if i == 0:
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
                 nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
+                nome_fantasia = extrair_campo_regex(r"Nome Fant\.:\s*(.*)", texto_completo_pagina)
+                if nome_fantasia != "N/E": nome_cliente = nome_fantasia
                 vendedor = "N/E"
                 try:
                     vendedor_rect_list = pagina.search_for("Vendedor")
@@ -80,10 +83,11 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 except Exception:
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
-
+            
             y_inicio = 40
-            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            if y_inicio_list: y_inicio = y_inicio_list[0].y1
+            if i == 0:
+                y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
+                if y_inicio_list: y_inicio = y_inicio_list[0].y1
             
             y_fim = pagina.rect.height - 40
             y_fim_list = pagina.search_for("TOTAL GERAL:")
@@ -98,70 +102,62 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             if y_fim_list:
                 break
 
-        print(f"--- DEBUG: Coleta finalizada. Total de palavras coletadas: {len(todas_as_palavras_da_tabela)}")
-
+        # ETAPA 2: PROCESSAR A LISTA - LÓGICA TOTALMENTE REESCRITA E ROBUSTA
         produtos_finais = []
         if todas_as_palavras_da_tabela:
-            buffer_de_produto = []
-            produtos_brutos = []
-            
-            for palavra in todas_as_palavras_da_tabela:
-                if re.match(r'^\d{12,14}$', palavra) and buffer_de_produto:
-                    produtos_brutos.append(" ".join(buffer_de_produto))
-                    buffer_de_produto = []
-                buffer_de_produto.append(palavra)
-            
-            if buffer_de_produto:
-                produtos_brutos.append(" ".join(buffer_de_produto))
+            texto_completo = " ".join(todas_as_palavras_da_tabela)
+            # Separa o texto em cada ponto que se parece com " [NÚMERO DO ITEM] [CÓDIGO DE BARRAS]"
+            produtos_brutos = re.split(r'(?=\d{1,3}\s+\d{12,14})', texto_completo)
 
-            print(f"--- DEBUG: Total de produtos brutos (lógica original): {len(produtos_brutos)}")
-            print(f"--- DEBUG: Amostra dos produtos brutos: {produtos_brutos[:5]}")
+            for produto_str in produtos_brutos:
+                linha = produto_str.strip()
+                if len(linha) < 15: continue # Pula lixo e linhas vazias
 
-            for i, produto_str in enumerate(produtos_brutos):
-                print(f"\n--- DEBUG: Processando produto bruto #{i}: '{produto_str[:100].strip()}'")
+                # Isola o que vem depois do código de barras
+                match_id = re.match(r'^\d+\s+[0-9]{12,14}\s*(.*)', linha)
+                if not match_id: continue
+                resto_str = match_id.group(1)
 
-                linha_limpa = re.sub(r'^\d+\s', '', produto_str).strip()
-                valor_total_item, quantidade_pedida, nome_produto_final = "0.00", "N/A", linha_limpa
+                # Encontra e remove todos os preços da string
+                precos = re.findall(r'R\$\s*[\d,.]+', resto_str)
+                valor_total_item = "0.00"
+                if precos:
+                    valor_total_item = precos[-1].replace('R$', '').strip()
+                
+                temp_str = re.sub(r'R\$\s*[\d,.]+', '', resto_str).strip()
 
-                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_limpa)
-                if match_valor:
-                    valor_total_item = match_valor.group(1).replace('R$', '').strip()
-                    nome_produto_final = nome_produto_final[:match_valor.start()].strip()
-                else:
-                    print(f"--- DEBUG: AVISO! Preço não encontrado no final da linha.")
-
-                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ).*)', nome_produto_final)
+                # Tenta encontrar um padrão de quantidade no que sobrou
+                quantidade_pedida = "N/A"
+                # Regex mais flexível para quantidade (ex: "1 UN", "DP C/12UN", "2 UN")
+                match_qtd = re.match(r'^(.*? (?:UN|CX|PC|FD|DP|CJ|ED|C/\d+UN|C/\s*\d+))', temp_str, re.IGNORECASE)
                 if match_qtd:
                     quantidade_pedida = match_qtd.group(1).strip()
-                    nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
+                    nome_produto_final = temp_str[len(quantidade_pedida):].strip()
+                else:
+                    nome_produto_final = temp_str # Se não achar, o que sobrou é o nome
                 
-                nome_produto_final = re.sub(r'^\d{8,15}\s*', '', nome_produto_final).strip()
-                
-                print(f"--- DEBUG: Nome final do produto antes do filtro: '{nome_produto_final}'")
-                
-                if len(nome_produto_final) < 3:
-                    print("--- DEBUG: Nome muito curto. Pulando.")
-                    continue
+                # Uma limpeza final no nome do produto para remover qualquer resquício
+                nome_produto_final = re.sub(r'^\d+\s', '', nome_produto_final).strip()
+                if len(nome_produto_final) < 3: continue
 
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
                 if match_unidades: unidades_pacote = int(match_unidades.group(1))
 
-                print(f"--- DEBUG: SUCESSO! Produto '{nome_produto_final}' foi adicionado.")
-                produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote})
+                produtos_finais.append({
+                    "produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, 
+                    "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote
+                })
         
         documento.close()
         
-        print(f"--- DEBUG: Final da função. Total de produtos finais: {len(produtos_finais)}")
         if not produtos_finais: 
-            print("--- DEBUG: Nenhum produto encontrado. Retornando erro.")
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
         
         return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
 
     except Exception as e:
         import traceback
-        print(f"--- DEBUG: OCORREU UMA EXCEÇÃO CRÍTICA: {str(e)}")
         return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
 
 def salvar_no_banco_de_dados(dados_do_pedido):
