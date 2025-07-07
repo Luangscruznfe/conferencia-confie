@@ -63,13 +63,16 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         dados_cabecalho = {}
         todas_as_palavras_da_tabela = []
 
-        # ETAPA 1: COLETAR TODAS AS PALAVRAS (Correto)
+        # ETAPA 1: COLETAR TODAS AS PALAVRAS DE TODAS AS PÁGINAS
         for i, pagina in enumerate(documento):
             if i == 0:
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
                 nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
+                # Tenta pegar o Nome Fantasia se disponível, que é mais curto
+                nome_fantasia = extrair_campo_regex(r"Nome Fant\.:\s*(.*)", texto_completo_pagina)
+                if nome_fantasia != "N/E": nome_cliente = nome_fantasia
                 vendedor = "N/E"
                 try:
                     vendedor_rect_list = pagina.search_for("Vendedor")
@@ -100,7 +103,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             if y_fim_list:
                 break
 
-        # ETAPA 2: PROCESSAR A LISTA - LÓGICA TOTALMENTE REESCRITA
+        # ETAPA 2: PROCESSAR A LISTA - LÓGICA TOTALMENTE REESCRITA E ROBUSTA
         produtos_finais = []
         if todas_as_palavras_da_tabela:
             texto_completo = " ".join(todas_as_palavras_da_tabela)
@@ -108,32 +111,31 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
             for produto_str in produtos_brutos:
                 linha = produto_str.strip()
-                if len(linha) < 15: continue # Pula linhas vazias ou com lixo
+                if len(linha) < 15: continue
 
-                # 1. Isolar o que vem depois do código de barras
-                match_id = re.match(r'^\d+\s+([0-9]{12,14})\s*(.*)', linha)
+                # Isola o que vem depois do código de barras
+                match_id = re.match(r'^\d+\s+[0-9]{12,14}\s*(.*)', linha)
                 if not match_id: continue
-                resto_str = match_id.group(2)
+                resto_str = match_id.group(1)
 
-                # 2. Encontrar e remover todos os preços da string
+                # Encontra e remove todos os preços da string
                 precos = re.findall(r'R\$\s*[\d,.]+', resto_str)
                 valor_total_item = "0.00"
                 if precos:
-                    valor_total_item = precos[-1].replace('R$', '').strip() # O último preço é o total
+                    valor_total_item = precos[-1].replace('R$', '').strip()
                 
                 temp_str = re.sub(r'R\$\s*[\d,.]+', '', resto_str).strip()
 
-                # 3. Encontrar e remover a quantidade da string
+                # Encontra a quantidade e o que sobra é o nome
                 quantidade_pedida = "N/A"
-                match_qtd = re.match(r'(.+?C/\s*\d+\w+|.+?\s(?:UN|CX|PC|FD|DP|CJ|ED))', temp_str, re.IGNORECASE)
+                # Esta regex procura por padrões de quantidade no início da string
+                match_qtd = re.match(r'^((?:\d+\s+)?(?:[A-Z]{2,}\s?)+(?:C/\s?\d+\w*)?)', temp_str, re.IGNORECASE)
                 if match_qtd:
                     quantidade_pedida = match_qtd.group(1).strip()
-                    # O que sobra é o nome do produto
                     nome_produto_final = temp_str[len(quantidade_pedida):].strip()
                 else:
-                    # Se não encontrar um padrão de quantidade claro, o resto é o nome
                     nome_produto_final = temp_str
-
+                
                 if len(nome_produto_final) < 3: continue
 
                 unidades_pacote = 1
