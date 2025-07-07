@@ -50,8 +50,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão definitiva que lê o PDF em blocos para manter a estrutura das linhas,
-    resolvendo o problema de quantidades trocadas.
+    Versão definitiva com arquitetura de reconstrução de linhas baseada em coordenadas.
     """
     try:
         if caminho_do_pdf:
@@ -61,8 +60,8 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         else:
             return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
 
+        # --- Extração de Cabeçalho (Mantida, pois já está robusta) ---
         dados_cabecalho = {}
-        # Extração de Cabeçalho (já está funcionando perfeitamente)
         pagina_um = documento[0]
         texto_completo_pagina = pagina_um.get_text("text")
         numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
@@ -93,69 +92,74 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         except Exception: pass
         dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-        # --- NOVA LÓGICA DE LEITURA POR BLOCOS/LINHAS ---
+        # --- NOVA ARQUITETURA DE EXTRAÇÃO DE PRODUTOS ---
         produtos_finais = []
-        texto_produtos_completo = ""
+        
+        # 1. Coleta todas as palavras de todas as páginas com suas coordenadas
+        todas_as_palavras = []
         for page in documento:
-            y_inicio = 40
-            if page.number == 0:
-                y_inicio_list = page.search_for("ITEM CÓD. BARRAS")
-                if y_inicio_list: y_inicio = y_inicio_list[0].y1
-            
-            y_fim = page.rect.height
-            y_fim_list = page.search_for("TOTAL GERAL:")
-            if y_fim_list: y_fim = y_fim_list[0].y0
-            
-            # Pega apenas os blocos de texto que estão dentro da área de produtos
-            blocos = page.get_text("blocks")
-            for b in blocos:
-                # Coordenadas do bloco: (x0, y0, x1, y1)
-                if b[1] > y_inicio and b[3] < y_fim:
-                     texto_produtos_completo += b[4].replace('\n', ' ') + ' '
-        
-        # Agora processamos o texto limpo que só contém produtos
-        if texto_produtos_completo:
-            produtos_brutos = re.split(r'(?=\d{1,3}\s+\d{12,14})', texto_produtos_completo)
-            for produto_str in produtos_brutos:
-                linha = produto_str.strip()
-                if len(linha) < 15: continue
-                match_id = re.match(r'^\d+\s+[0-9]{12,14}\s*(.*)', linha)
-                if not match_id: continue
-                
-                resto_str = match_id.group(1)
-                precos = re.findall(r'R\$\s*[\d,.]+', resto_str)
-                valor_total_item = "0.00"
-                if precos:
-                    valor_total_item = precos[-1].replace('R$', '').strip()
-                
-                temp_str = re.sub(r'R\$\s*[\d,.]+', '', resto_str).strip()
-                
-                palavras_temp = temp_str.split()
-                indice_nome = 0
-                quantidade_pedida = "N/A"
-                for i, palavra in enumerate(palavras_temp):
-                    if not re.fullmatch(r'(UN|CX|PC|FD|DP|CJ|ED|C/|C/\d+|[0-9.,]+)', palavra, re.IGNORECASE):
-                        indice_nome = i
-                        break
-                
-                if indice_nome > 0:
-                    quantidade_pedida = " ".join(palavras_temp[:indice_nome])
-                    nome_produto_final = " ".join(palavras_temp[indice_nome:])
-                else:
-                    quantidade_pedida = "N/A" # Se a primeira palavra já é o nome
-                    nome_produto_final = temp_str
-                
-                if len(nome_produto_final) < 3: continue
+            todas_as_palavras.extend(page.get_text("words"))
 
-                unidades_pacote = 1
-                match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
-                if match_unidades: unidades_pacote = int(match_unidades.group(1))
-                
-                produtos_finais.append({
-                    "produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, 
-                    "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote
-                })
-        
+        # 2. Agrupa palavras em linhas baseadas na coordenada vertical (y0)
+        linhas = defaultdict(list)
+        for w in todas_as_palavras:
+            # A chave é a coordenada y0 arredondada, para agrupar palavras na mesma linha
+            linhas[round(w[1])].append(w)
+
+        # 3. Reconstrói cada linha, ordenando as palavras pela coordenada horizontal (x0)
+        linhas_reconstruidas = []
+        for y in sorted(linhas.keys()):
+            palavras_ordenadas = sorted(linhas[y], key=lambda w: w[0])
+            linha_texto = " ".join([palavra[4] for palavra in palavras_ordenadas])
+            linhas_reconstruidas.append(linha_texto)
+            
+        # 4. Analisa as linhas reconstruídas para encontrar e processar os produtos
+        for linha in linhas_reconstruidas:
+            # Um produto é identificado se a linha começa com [item] [código de barras]
+            match_produto = re.search(r'^\d{1,3}\s+\d{12,14}', linha)
+            if not match_produto:
+                continue
+
+            linha = linha.strip()
+            match_id = re.match(r'^\d+\s+[0-9]{12,14}\s*(.*)', linha)
+            if not match_id: continue
+            
+            resto_str = match_id.group(1)
+            precos = re.findall(r'R\$\s*[\d,.]+', resto_str)
+            valor_total_item = "0.00"
+            if precos:
+                valor_total_item = precos[-1].replace('R$', '').strip()
+            
+            temp_str = re.sub(r'R\$\s*[\d,.]+', '', resto_str).strip()
+            
+            palavras_temp = temp_str.split()
+            indice_nome = 0
+            quantidade_pedida = "N/A"
+            for i, palavra in enumerate(palavras_temp):
+                if not re.fullmatch(r'(UN|CX|PC|FD|DP|CJ|ED|C/|C/\d+|[0-9.,]+)', palavra, re.IGNORECASE):
+                    indice_nome = i
+                    break
+            
+            if indice_nome > 0 or (len(palavras_temp) > 0 and re.fullmatch(r'(UN|CX|PC|FD|DP|CJ|ED|C/|C/\d+|[0-9.,]+)', palavras_temp[0], re.IGNORECASE)):
+                 # Caso especial: se a linha inteira for quantidade
+                if indice_nome == 0: indice_nome = len(palavras_temp)
+                quantidade_pedida = " ".join(palavras_temp[:indice_nome])
+                nome_produto_final = " ".join(palavras_temp[indice_nome:])
+            else:
+                quantidade_pedida = "N/A"
+                nome_produto_final = temp_str
+            
+            if len(nome_produto_final) < 3: continue
+
+            unidades_pacote = 1
+            match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
+            if match_unidades: unidades_pacote = int(match_unidades.group(1))
+            
+            produtos_finais.append({
+                "produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, 
+                "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote
+            })
+
         documento.close()
         
         if not produtos_finais: 
