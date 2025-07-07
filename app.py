@@ -50,8 +50,8 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão final com nova estratégia de extração baseada em gatilhos (código de barras)
-    para máxima robustez em diferentes ambientes.
+    Versão final que combina a extração de múltiplas páginas com a lógica
+    robusta de parseamento de cada linha de produto.
     """
     try:
         if caminho_do_pdf:
@@ -63,8 +63,12 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
         produtos_finais = []
         dados_cabecalho = {}
+        extracao_finalizada = False # Flag para controlar o fim da extração
 
         for i, pagina in enumerate(documento):
+            if extracao_finalizada:
+                break # Para o loop se o total geral já foi encontrado
+
             if i == 0:
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
@@ -84,48 +88,53 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
             y_inicio, y_fim = 0, pagina.rect.height
             y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            if y_inicio_list: y_inicio = y_inicio_list[0].y1
-            else: y_inicio = 40
-            
+            if y_inicio_list:
+                y_inicio = y_inicio_list[0].y1
+            else:
+                y_inicio = 40
+
             y_fim_list = pagina.search_for("TOTAL GERAL")
-            if y_fim_list: y_fim = y_fim_list[0].y0
+            if y_fim_list:
+                y_fim = y_fim_list[0].y0
+                extracao_finalizada = True # Ativa a flag para parar na próxima iteração
             else:
                 footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-                if footer_list: y_fim = footer_list[0].y0 - 5
-                else: y_fim = pagina.rect.height - 40
+                if footer_list:
+                    y_fim = footer_list[0].y0 - 5
+                else:
+                    y_fim = pagina.rect.height - 40
             
             if y_inicio >= y_fim: continue
 
-            palavras_na_tabela = [p[4] for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
+            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             if not palavras_na_tabela: continue
 
-            # Nova lógica: encontrar produtos baseados em gatilhos
-            buffer_de_produto = []
-            produtos_brutos = []
-            
-            for palavra in palavras_na_tabela:
-                # Gatilho: um código de barras (12-14 dígitos) sinaliza um novo produto
-                if re.match(r'^\d{12,14}$', palavra) and buffer_de_produto:
-                    # Encontrou um novo produto, então salva o anterior
-                    produtos_brutos.append(" ".join(buffer_de_produto))
-                    buffer_de_produto = [] # Limpa para o novo produto
-                
-                buffer_de_produto.append(palavra)
-            
-            # Adiciona o último produto do buffer
-            if buffer_de_produto:
-                produtos_brutos.append(" ".join(buffer_de_produto))
+            # Agrupamento de palavras em linhas (lógica que já funciona)
+            palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
+            linhas_agrupadas = []
+            if palavras_na_tabela:
+                linha_atual = [palavras_na_tabela[0]]
+                y_referencia = palavras_na_tabela[0][1]
+                for j in range(1, len(palavras_na_tabela)):
+                    palavra = palavras_na_tabela[j]
+                    if abs(palavra[1] - y_referencia) < 5:
+                        linha_atual.append(palavra)
+                    else:
+                        linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+                        linha_atual = [palavra]
+                        y_referencia = palavra[1]
+                linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
-            # Agora processa cada string de produto completa
-            for produto_str in produtos_brutos:
-                # Remove o código do item inicial (ex: "5 789...")
-                linha_limpa = re.sub(r'^\d+\s', '', produto_str).strip()
+            # Lógica final para extrair os dados de cada linha
+            for linha in linhas_agrupadas:
+                linha_texto = " ".join([palavra[4] for palavra in linha])
+                if any(cabecalho in linha_texto.upper() for cabecalho in ['ITEM CÓD', 'DESCRIÇÃO', 'BARRAS']): continue
                 
                 valor_total_item = "0.00"
                 quantidade_pedida = "N/A"
-                nome_produto_final = linha_limpa
+                nome_produto_final = linha_texto
 
-                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_limpa)
+                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_texto)
                 if match_valor:
                     valor_total_item = match_valor.group(1).replace('R$', '').strip()
                     nome_produto_final = nome_produto_final[:match_valor.start()].strip()
@@ -135,7 +144,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     quantidade_pedida = match_qtd.group(1).strip()
                     nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
                 
-                nome_produto_final = re.sub(r'^\d{8,15}\s*', '', nome_produto_final).strip()
+                nome_produto_final = re.sub(r'^\d+\s+\d{8,15}\s*', '', nome_produto_final).strip()
                 if len(nome_produto_final) < 3: continue
 
                 unidades_pacote = 1
