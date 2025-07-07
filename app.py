@@ -50,7 +50,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão definitiva com parseador de dados reescrito baseado na estrutura real do PDF.
+    Versão final com extração de cabeçalho e produtos de forma robusta.
     """
     try:
         if caminho_do_pdf:
@@ -63,27 +63,57 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         dados_cabecalho = {}
         todas_as_palavras_da_tabela = []
 
-        # ETAPA 1: COLETAR TODAS AS PALAVRAS (Correto)
+        # ETAPA 1: COLETA DE DADOS (COM CABEÇALHO CORRIGIDO)
         for i, pagina in enumerate(documento):
             if i == 0:
-                texto_completo_pagina = pagina.get_text("text")
-                numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
-                if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
-                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
-                nome_fantasia = extrair_campo_regex(r"Nome Fant\.:\s*(.*)", texto_completo_pagina)
-                if nome_fantasia != "N/E": nome_cliente = nome_fantasia
+                # --- Início da Nova Extração de Cabeçalho ---
+                # Esta técnica busca as coordenadas de um rótulo e extrai o texto ao lado.
+                # É imune a problemas de layout.
+
+                numero_pedido = "N/E"
+                try:
+                    # Procura pelo texto "Pedido:" na segunda coluna da tabela de cabeçalho 
+                    search_list = pagina.search_for("Pedido:")
+                    if len(search_list) > 1:
+                        rect = search_list[1] # O segundo "Pedido:" é o que queremos
+                        search_area = fitz.Rect(rect.x1, rect.y0, rect.x1 + 150, rect.y1)
+                        numero_pedido = pagina.get_text("text", clip=search_area).strip().split('\n')[0]
+                except Exception:
+                    pass # Se falhar, continua como "N/E"
+
+                nome_cliente = "N/E"
+                try:
+                    # Prioriza o "Nome Fant." que é mais limpo 
+                    search_list = pagina.search_for("Nome Fant.:")
+                    if search_list:
+                        rect = search_list[0]
+                        search_area = fitz.Rect(rect.x1, rect.y0, pagina.rect.width - 20, rect.y1 + 5)
+                        nome_cliente = pagina.get_text("text", clip=search_area).strip()
+                    else: # Se não achar, busca pelo "Cliente:" principal 
+                        search_list = pagina.search_for("Cliente:")
+                        if len(search_list) > 1:
+                            rect = search_list[1]
+                            search_area = fitz.Rect(rect.x1, rect.y0, pagina.rect.width - 20, rect.y1 + 5)
+                            nome_cliente = pagina.get_text("text", clip=search_area).strip().split('\n')[0]
+                except Exception:
+                    pass
+                
                 vendedor = "N/E"
                 try:
-                    vendedor_rect_list = pagina.search_for("Vendedor")
-                    if vendedor_rect_list:
-                        vendedor_rect = vendedor_rect_list[0]
-                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
+                    # A lógica para vendedor já era robusta [cite: 9, 10]
+                    search_list = pagina.search_for("Vendedor")
+                    if search_list:
+                        rect = search_list[0]
+                        search_area = fitz.Rect(rect.x0 - 20, rect.y1, rect.x1 + 80, rect.y1 + 20)
                         vendedor_words = pagina.get_text("words", clip=search_area)
-                        if vendedor_words: vendedor = vendedor_words[0][4]
+                        if vendedor_words: vendedor = sorted(vendedor_words, key=lambda w: w[0])[0][4]
                 except Exception:
-                    vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
+                    pass
+
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
-            
+                # --- Fim da Nova Extração de Cabeçalho ---
+
+            # Lógica para encontrar a área dos produtos (sem alterações)
             y_inicio = 40
             if i == 0:
                 y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
@@ -102,48 +132,35 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             if y_fim_list:
                 break
 
-        # ETAPA 2: PROCESSAR A LISTA - LÓGICA TOTALMENTE REESCRITA E ROBUSTA
+        # ETAPA 2: PROCESSAR PRODUTOS (Lógica robusta já implementada)
         produtos_finais = []
         if todas_as_palavras_da_tabela:
             texto_completo = " ".join(todas_as_palavras_da_tabela)
-            # Separa o texto em cada ponto que se parece com " [NÚMERO DO ITEM] [CÓDIGO DE BARRAS]"
             produtos_brutos = re.split(r'(?=\d{1,3}\s+\d{12,14})', texto_completo)
 
             for produto_str in produtos_brutos:
                 linha = produto_str.strip()
-                if len(linha) < 15: continue # Pula lixo e linhas vazias
-
-                # Isola o que vem depois do código de barras
+                if len(linha) < 15: continue
                 match_id = re.match(r'^\d+\s+[0-9]{12,14}\s*(.*)', linha)
                 if not match_id: continue
                 resto_str = match_id.group(1)
-
-                # Encontra e remove todos os preços da string
                 precos = re.findall(r'R\$\s*[\d,.]+', resto_str)
                 valor_total_item = "0.00"
                 if precos:
                     valor_total_item = precos[-1].replace('R$', '').strip()
-                
                 temp_str = re.sub(r'R\$\s*[\d,.]+', '', resto_str).strip()
-
-                # Tenta encontrar um padrão de quantidade no que sobrou
                 quantidade_pedida = "N/A"
-                # Regex mais flexível para quantidade (ex: "1 UN", "DP C/12UN", "2 UN")
                 match_qtd = re.match(r'^(.*? (?:UN|CX|PC|FD|DP|CJ|ED|C/\d+UN|C/\s*\d+))', temp_str, re.IGNORECASE)
                 if match_qtd:
                     quantidade_pedida = match_qtd.group(1).strip()
                     nome_produto_final = temp_str[len(quantidade_pedida):].strip()
                 else:
-                    nome_produto_final = temp_str # Se não achar, o que sobrou é o nome
-                
-                # Uma limpeza final no nome do produto para remover qualquer resquício
+                    nome_produto_final = temp_str
                 nome_produto_final = re.sub(r'^\d+\s', '', nome_produto_final).strip()
                 if len(nome_produto_final) < 3: continue
-
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
                 if match_unidades: unidades_pacote = int(match_unidades.group(1))
-
                 produtos_finais.append({
                     "produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, 
                     "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote
