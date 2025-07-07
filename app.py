@@ -50,7 +50,7 @@ def extrair_campo_regex(pattern, text):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     """
-    Versão final com todas as correções de cabeçalho, multipágina e parsing de quantidade.
+    Versão final com extração de cabeçalho correta e abordagem de "força bruta" para garantir a leitura de múltiplas páginas.
     """
     try:
         if caminho_do_pdf:
@@ -60,17 +60,18 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         else:
             return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
 
+        # Adicionado print para verificar o número de páginas que o Fitz está vendo
+        print(f"--- DEBUG: Documento aberto. Número de páginas: {len(documento)}")
+
         dados_cabecalho = {}
         todas_as_palavras_da_tabela = []
 
         for i, pagina in enumerate(documento):
+            print(f"--- DEBUG: Lendo palavras da página {i + 1}")
             if i == 0:
+                # Extração de cabeçalho está funcionando bem, mantemos como está
                 texto_completo_pagina = pagina.get_text("text")
-                
-                # --- CORREÇÃO CABEÇALHO: Revertendo 'numero_pedido' para o método regex que funcionava ---
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
-                
-                # Extração de cliente e vendedor mantida com a técnica de busca por área
                 nome_cliente = "N/E"
                 try:
                     search_list = pagina.search_for("Nome Fant.:")
@@ -85,7 +86,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                             search_area = fitz.Rect(rect.x1, rect.y0, pagina.rect.width - 20, rect.y1 + 5)
                             nome_cliente = pagina.get_text("text", clip=search_area).strip().split('\n')[0]
                 except Exception: pass
-                
                 vendedor = "N/E"
                 try:
                     search_list = pagina.search_for("Vendedor")
@@ -95,28 +95,16 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                         vendedor_words = pagina.get_text("words", clip=search_area)
                         if vendedor_words: vendedor = sorted(vendedor_words, key=lambda w: w[0])[0][4]
                 except Exception: pass
-
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
-
-            y_inicio = 40
-            if i == 0:
-                y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-                if y_inicio_list: y_inicio = y_inicio_list[0].y1
             
-            y_fim = pagina.rect.height - 40
-            y_fim_list = pagina.search_for("TOTAL GERAL:")
-            if y_fim_list:
-                y_fim = y_fim_list[0].y0
-            else:
-                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-                if footer_list: y_fim = footer_list[0].y0 - 5
-            
-            palavras_pagina = [p[4] for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
+            # --- ABORDAGEM DE FORÇA BRUTA ---
+            # Simplesmente pega TODAS as palavras da página. A Etapa 2 vai filtrar.
+            palavras_pagina = [p[4] for p in pagina.get_text("words")]
             todas_as_palavras_da_tabela.extend(palavras_pagina)
-            
-            # --- CORREÇÃO MULTIPÁGINA: Removido o 'break' para garantir que todas as páginas sejam lidas ---
 
-        # ETAPA 2: PROCESSAR PRODUTOS (COM NOVO ALGORITMO DE QUANTIDADE)
+        print(f"--- DEBUG: Leitura de todas as páginas concluída. Total de palavras: {len(todas_as_palavras_da_tabela)}")
+        
+        # ETAPA 2: PROCESSAR PRODUTOS (Usa a lógica robusta que já funciona)
         produtos_finais = []
         if todas_as_palavras_da_tabela:
             texto_completo = " ".join(todas_as_palavras_da_tabela)
@@ -132,32 +120,24 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 valor_total_item = "0.00"
                 if precos:
                     valor_total_item = precos[-1].replace('R$', '').strip()
-                
                 temp_str = re.sub(r'R\$\s*[\d,.]+', '', resto_str).strip()
-
-                # --- CORREÇÃO QUANTIDADE: Novo algoritmo para extrair quantidades complexas ---
                 palavras_temp = temp_str.split()
                 indice_nome = 0
                 quantidade_pedida = "N/A"
                 for i, palavra in enumerate(palavras_temp):
-                    # Se a palavra não é um código de unidade, um número, ou 'C/', ela é o início do nome
                     if not re.fullmatch(r'(UN|CX|PC|FD|DP|CJ|ED|C/|C/\d+|[0-9.,]+)', palavra, re.IGNORECASE):
                         indice_nome = i
                         break
-                
                 if indice_nome > 0:
                     quantidade_pedida = " ".join(palavras_temp[:indice_nome])
                     nome_produto_final = " ".join(palavras_temp[indice_nome:])
                 else:
                     quantidade_pedida = "N/A"
                     nome_produto_final = temp_str
-
                 if len(nome_produto_final) < 3: continue
-
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
                 if match_unidades: unidades_pacote = int(match_unidades.group(1))
-
                 produtos_finais.append({
                     "produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, 
                     "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote
@@ -173,7 +153,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
     except Exception as e:
         import traceback
         return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
-
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
     conn = get_db_connection()
