@@ -49,144 +49,113 @@ def extrair_campo_regex(pattern, text):
     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
-    
-    #Extrai os dados do pedido de um PDF, incluindo produtos mesmo que estejam após o "TOTAL GERAL" em outra página.
-    
-    try:
-        if caminho_do_pdf:
-            documento = fitz.open(caminho_do_pdf)
-        elif stream:
-            documento = fitz.open(stream=stream, filetype="pdf")
-        else:
-            return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
+    """
+    Versão original com a correção mínima para ler múltiplas páginas.
+    """
+    try:
+        if caminho_do_pdf:
+            documento = fitz.open(caminho_do_pdf)
+        elif stream:
+            documento = fitz.open(stream=stream, filetype="pdf")
+        else:
+            return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
 
-        dados_cabecalho = {}
-        todas_as_palavras_da_tabela = []
+        dados_cabecalho = {}
+        todas_as_palavras_da_tabela = []
 
-        i = 0
-        while i < len(documento):
-            pagina = documento[i]
+        # ETAPA 1: CORRIGIDO PARA LER TODAS AS PÁGINAS DE PRODUTOS
+        for i, pagina in enumerate(documento):
+            if i == 0:
+                texto_completo_pagina = pagina.get_text("text")
+                numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
+                if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
+                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
+                vendedor = "N/E"
+                try:
+                    vendedor_rect_list = pagina.search_for("Vendedor")
+                    if vendedor_rect_list:
+                        vendedor_rect = vendedor_rect_list[0]
+                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
+                        vendedor_words = pagina.get_text("words", clip=search_area)
+                        if vendedor_words: vendedor = vendedor_words[0][4]
+                except Exception:
+                    vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
+                dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-            if i == 0:
-                texto_completo_pagina = pagina.get_text("text")
-                numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
-                if numero_pedido == "N/E":
-                    numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
-                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
+            # --- Início da Alteração Mínima ---
+            
+            # 1. Define os limites da área de produtos para a página atual
+            y_inicio = 40
+            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
+            if y_inicio_list: y_inicio = y_inicio_list[0].y1
+            
+            y_fim = pagina.rect.height - 40
+            # Corrigido para buscar "TOTAL GERAL:" com os dois pontos
+            y_fim_list = pagina.search_for("TOTAL GERAL:")
+            if y_fim_list:
+                y_fim = y_fim_list[0].y0
+            else:
+                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
+                if footer_list: y_fim = footer_list[0].y0 - 5
+            
+            # 2. Extrai as palavras da área definida e adiciona à lista principal
+            palavras_pagina = [p[4] for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
+            todas_as_palavras_da_tabela.extend(palavras_pagina)
 
-                vendedor = "N/E"
-                try:
-                    vendedor_rect_list = pagina.search_for("Vendedor")
-                    if vendedor_rect_list:
-                        vendedor_rect = vendedor_rect_list[0]
-                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
-                        vendedor_words = pagina.get_text("words", clip=search_area)
-                        if vendedor_words:
-                            vendedor = vendedor_words[0][4]
-                except Exception:
-                    vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
+            # 3. SÓ DEPOIS de extrair, verifica se deve parar
+            if y_fim_list:
+                break
+            
+            # --- Fim da Alteração Mínima ---
 
-                dados_cabecalho = {
-                    "numero_pedido": numero_pedido,
-                    "nome_cliente": nome_cliente,
-                    "vendedor": vendedor
-                }
+        # ETAPA 2: PROCESSAR A LISTA UNIFICADA DE PALAVRAS (SUA LÓGICA ORIGINAL)
+        produtos_finais = []
+        if todas_as_palavras_da_tabela:
+            buffer_de_produto = []
+            produtos_brutos = []
+            
+            for palavra in todas_as_palavras_da_tabela:
+                if re.match(r'^\d{12,14}$', palavra) and buffer_de_produto:
+                    produtos_brutos.append(" ".join(buffer_de_produto))
+                    buffer_de_produto = []
+                buffer_de_produto.append(palavra)
+            
+            if buffer_de_produto:
+                produtos_brutos.append(" ".join(buffer_de_produto))
 
-            y_inicio = 40
-            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            if y_inicio_list:
-                y_inicio = y_inicio_list[0].y1
+            for produto_str in produtos_brutos:
+                linha_limpa = re.sub(r'^\d+\s', '', produto_str).strip()
+                valor_total_item, quantidade_pedida, nome_produto_final = "0.00", "N/A", linha_limpa
 
-            y_fim = pagina.rect.height - 40
-            y_fim_list = pagina.search_for("TOTAL GERAL")
-            if y_fim_list:
-                y_fim = y_fim_list[0].y0
-            else:
-                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-                if footer_list:
-                    y_fim = footer_list[0].y0 - 5
+                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_limpa)
+                if match_valor:
+                    valor_total_item = match_valor.group(1).replace('R$', '').strip()
+                    nome_produto_final = nome_produto_final[:match_valor.start()].strip()
 
-            palavras_pagina = [p[4] for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
-            todas_as_palavras_da_tabela.extend(palavras_pagina)
+                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ).*)', nome_produto_final)
+                if match_qtd:
+                    quantidade_pedida = match_qtd.group(1).strip()
+                    nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
+                
+                nome_produto_final = re.sub(r'^\d{8,15}\s*', '', nome_produto_final).strip()
+                if len(nome_produto_final) < 3: continue
 
-            if y_fim_list:
-                # Encontrou TOTAL GERAL → olha próxima página
-                i += 1
-                if i >= len(documento):
-                    break
-                proxima_pagina = documento[i]
-                palavras_proxima = [p[4] for p in proxima_pagina.get_text("words")]
-                encontrou_codigo_barras = any(re.match(r'^\d{12,14}$', palavra) for palavra in palavras_proxima)
-                if encontrou_codigo_barras:
-                    continue  # vai processar no próximo loop
-                else:
-                    break  # não tem mais produtos
-            else:
-                i += 1
+                unidades_pacote = 1
+                match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
+                if match_unidades: unidades_pacote = int(match_unidades.group(1))
 
-        # ETAPA 2: PROCESSAR A LISTA UNIFICADA DE PALAVRAS
-        produtos_finais = []
-        if todas_as_palavras_da_tabela:
-            buffer_de_produto = []
-            produtos_brutos = []
+                produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote})
+        
+        documento.close()
+        
+        if not produtos_finais: 
+            return {"erro": "Nenhum produto pôde ser extraído do PDF."}
+        
+        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
 
-            for palavra in todas_as_palavras_da_tabela:
-                if re.match(r'^\d{12,14}$', palavra) and buffer_de_produto:
-                    produtos_brutos.append(" ".join(buffer_de_produto))
-                    buffer_de_produto = []
-                buffer_de_produto.append(palavra)
-
-            if buffer_de_produto:
-                produtos_brutos.append(" ".join(buffer_de_produto))
-
-            for produto_str in produtos_brutos:
-                linha_limpa = re.sub(r'^\d+\s', '', produto_str).strip()
-                valor_total_item, quantidade_pedida, nome_produto_final = "0.00", "N/A", linha_limpa
-
-                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_limpa)
-                if match_valor:
-                    valor_total_item = match_valor.group(1).replace('R$', '').strip()
-                    nome_produto_final = nome_produto_final[:match_valor.start()].strip()
-
-                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ).*)', nome_produto_final)
-                if match_qtd:
-                    quantidade_pedida = match_qtd.group(1).strip()
-                    nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
-
-                nome_produto_final = re.sub(r'^\d{8,15}\s*', '', nome_produto_final).strip()
-                if len(nome_produto_final) < 3:
-                    continue
-
-                unidades_pacote = 1
-                match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
-                if match_unidades:
-                    unidades_pacote = int(match_unidades.group(1))
-
-                produtos_finais.append({
-                    "produto_nome": nome_produto_final,
-                    "quantidade_pedida": quantidade_pedida,
-                    "quantidade_entregue": None,
-                    "status": "Pendente",
-                    "valor_total_item": valor_total_item.replace(',', '.'),
-                    "unidades_pacote": unidades_pacote
-                })
-
-        documento.close()
-
-        if not produtos_finais:
-            return {"erro": "Nenhum produto pôde ser extraído do PDF."}
-
-        return {
-            **dados_cabecalho,
-            "produtos": produtos_finais,
-            "status_conferencia": "Pendente",
-            "nome_da_carga": nome_da_carga,
-            "nome_arquivo": nome_arquivo
-        }
-
-    except Exception as e:
-        import traceback
-        return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
+    except Exception as e:
+        import traceback
+        return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
 
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
