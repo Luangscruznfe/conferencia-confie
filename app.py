@@ -64,7 +64,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         dados_cabecalho = {}
         todas_as_palavras_da_tabela = []
 
-        # ETAPA 1: COLETAR TODAS AS PALAVRAS DE TODAS AS PÁGINAS
+        # ETAPA 1: COLETAR TODAS AS PALAVRAS DE TODAS AS PÁGINAS (Esta parte estava correta)
         for i, pagina in enumerate(documento):
             if i == 0:
                 texto_completo_pagina = pagina.get_text("text")
@@ -89,9 +89,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 if y_inicio_list: y_inicio = y_inicio_list[0].y1
             
             y_fim = pagina.rect.height - 40
-            
-            # CORREÇÃO 1: Adicionado os dois pontos em "TOTAL GERAL:"
-            y_fim_list = pagina.search_for("TOTAL GERAL:") 
+            y_fim_list = pagina.search_for("TOTAL GERAL:")
             if y_fim_list:
                 y_fim = y_fim_list[0].y0
             else:
@@ -104,35 +102,31 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             if y_fim_list:
                 break
 
-        # ETAPA 2: PROCESSAR A LISTA UNIFICADA DE PALAVRAS
+        # ETAPA 2: PROCESSAR A LISTA UNIFICADA DE PALAVRAS (LÓGICA NOVA E ROBUSTA)
         produtos_finais = []
         if todas_as_palavras_da_tabela:
-            buffer_de_produto = []
-            produtos_brutos = []
+            texto_completo = " ".join(todas_as_palavras_da_tabela)
             
-            for palavra in todas_as_palavras_da_tabela:
-                if re.match(r'^\d{12,14}$', palavra) and buffer_de_produto:
-                    produtos_brutos.append(" ".join(buffer_de_produto))
-                    buffer_de_produto = []
-                buffer_de_produto.append(palavra)
-            
-            if buffer_de_produto:
-                produtos_brutos.append(" ".join(buffer_de_produto))
+            # Divide o texto em cada ponto que se parece com " [NÚMERO DO ITEM] [CÓDIGO DE BARRAS]"
+            # A expressão (?=...) "olha para frente" sem consumir o texto, garantindo que o delimitador fique com o produto certo.
+            produtos_brutos = re.split(r'(?=\d{1,3}\s\d{12,14})', texto_completo)
 
             for produto_str in produtos_brutos:
-                # CORREÇÃO 2: Pular "produtos" que são apenas o número do item
-                if re.fullmatch(r'\d{1,3}', produto_str):
-                    continue
+                if not produto_str.strip(): continue # Pula strings vazias
 
+                # Remove o número do item (ex: "5 ") do início da string
                 linha_limpa = re.sub(r'^\d+\s', '', produto_str).strip()
                 valor_total_item, quantidade_pedida, nome_produto_final = "0.00", "N/A", linha_limpa
 
-                match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_limpa)
+                match_valor = re.search(r'(R\$\s*[\d.,]+)\s*(R\$\s*[\d.,]+)?$', linha_limpa)
                 if match_valor:
-                    valor_total_item = match_valor.group(1).replace('R$', '').strip()
+                    # Captura o último valor, que é o valor total do item
+                    valor_total_item = match_valor.group(2) if match_valor.group(2) else match_valor.group(1)
+                    valor_total_item = valor_total_item.replace('R$', '').strip()
                     nome_produto_final = nome_produto_final[:match_valor.start()].strip()
-
-                match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ).*)', nome_produto_final)
+                
+                # Regex mais flexível para extrair a quantidade
+                match_qtd = re.search(r'((?:\d+\s+)?(?:CX|UN|PC|FD|DP|CJ|ED|C/).*)', nome_produto_final, re.IGNORECASE)
                 if match_qtd:
                     quantidade_pedida = match_qtd.group(1).strip()
                     nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
@@ -158,13 +152,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         if not produtos_finais: 
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
         
-        return {
-            **dados_cabecalho, 
-            "produtos": produtos_finais, 
-            "status_conferencia": "Pendente", 
-            "nome_da_carga": nome_da_carga, 
-            "nome_arquivo": nome_arquivo
-        }
+        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
 
     except Exception as e:
         import traceback
