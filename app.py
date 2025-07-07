@@ -67,6 +67,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         # ETAPA 1: COLETAR TODAS AS PALAVRAS DE TODAS AS PÁGINAS
         for i, pagina in enumerate(documento):
             if i == 0:
+                # A extração do cabeçalho só precisa acontecer na primeira página
                 texto_completo_pagina = pagina.get_text("text")
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E": numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
@@ -83,23 +84,34 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                     vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
                 dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
 
-            y_inicio = 40
-            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            if y_inicio_list: y_inicio = y_inicio_list[0].y1
+            # --- LÓGICA DE EXTRAÇÃO DA TABELA (CORRIGIDA) ---
             
-            y_fim = pagina.rect.height - 40
+            # Define a área de início da tabela
+            y_inicio = 40  # Padrão para páginas seguintes
+            if i == 0:
+                y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
+                if y_inicio_list: y_inicio = y_inicio_list[0].y1
+            
+            # Define a área final da tabela
+            y_fim = pagina.rect.height - 40 # Padrão é perto do rodapé
+            
+            # Procura pelo fim da tabela. A prioridade é "TOTAL GERAL".
             y_fim_list = pagina.search_for("TOTAL GERAL")
             if y_fim_list:
-                y_fim = y_fim_list[0].y0
-                palavras_pagina = [p[4] for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
-                todas_as_palavras_da_tabela.extend(palavras_pagina)
-                break # Encontrou o total, para de ler páginas
+                y_fim = y_fim_list[0].y0 # O fim é o topo da linha "TOTAL GERAL"
             else:
+                # Se não achar o total, usa o rodapé como limite
                 footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
                 if footer_list: y_fim = footer_list[0].y0 - 5
             
+            # Extrai as palavras APENAS da área de tabela definida
             palavras_pagina = [p[4] for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             todas_as_palavras_da_tabela.extend(palavras_pagina)
+
+            # Se o "TOTAL GERAL" foi encontrado nesta página, podemos parar.
+            # Já extraímos os dados dela, então o break é seguro.
+            if y_fim_list:
+                break
 
         # ETAPA 2: PROCESSAR A LISTA UNIFICADA DE PALAVRAS
         produtos_finais = []
@@ -107,6 +119,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             buffer_de_produto = []
             produtos_brutos = []
             
+            # Usa o código de barras como delimitador para agrupar linhas de produtos
             for palavra in todas_as_palavras_da_tabela:
                 if re.match(r'^\d{12,14}$', palavra) and buffer_de_produto:
                     produtos_brutos.append(" ".join(buffer_de_produto))
@@ -117,34 +130,52 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 produtos_brutos.append(" ".join(buffer_de_produto))
 
             for produto_str in produtos_brutos:
+                # Remove o número do item (ex: "1 ", "2 ") do início da string
                 linha_limpa = re.sub(r'^\d+\s', '', produto_str).strip()
                 valor_total_item, quantidade_pedida, nome_produto_final = "0.00", "N/A", linha_limpa
 
+                # Extrai valor total e valor unitário (se houver)
                 match_valor = re.search(r'(R\$\s*[\d,.]+)\s*(R\$\s*[\d,.]+)?$', linha_limpa)
                 if match_valor:
                     valor_total_item = match_valor.group(1).replace('R$', '').strip()
                     nome_produto_final = nome_produto_final[:match_valor.start()].strip()
 
+                # Extrai a quantidade pedida (ex: "2 UN", "1 DP C/12UN")
                 match_qtd = re.search(r'(\d+\s+(?:CX|UN|PC|FD|DP|CJ).*)', nome_produto_final)
                 if match_qtd:
                     quantidade_pedida = match_qtd.group(1).strip()
                     nome_produto_final = nome_produto_final[:match_qtd.start()].strip()
                 
+                # Remove o código de barras do nome do produto
                 nome_produto_final = re.sub(r'^\d{8,15}\s*', '', nome_produto_final).strip()
-                if len(nome_produto_final) < 3: continue
+                if len(nome_produto_final) < 3: continue # Pula linhas vazias ou com lixo
 
+                # Extrai a quantidade de unidades no pacote (ex: C/12UN -> 12)
                 unidades_pacote = 1
                 match_unidades = re.search(r'C/\s*(\d+)', quantidade_pedida, re.IGNORECASE)
                 if match_unidades: unidades_pacote = int(match_unidades.group(1))
 
-                produtos_finais.append({"produto_nome": nome_produto_final, "quantidade_pedida": quantidade_pedida, "quantidade_entregue": None, "status": "Pendente", "valor_total_item": valor_total_item.replace(',', '.'), "unidades_pacote": unidades_pacote})
+                produtos_finais.append({
+                    "produto_nome": nome_produto_final, 
+                    "quantidade_pedida": quantidade_pedida, 
+                    "quantidade_entregue": None, 
+                    "status": "Pendente", 
+                    "valor_total_item": valor_total_item.replace(',', '.'), 
+                    "unidades_pacote": unidades_pacote
+                })
         
         documento.close()
         
         if not produtos_finais: 
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
         
-        return {**dados_cabecalho, "produtos": produtos_finais, "status_conferencia": "Pendente", "nome_da_carga": nome_da_carga, "nome_arquivo": nome_arquivo}
+        return {
+            **dados_cabecalho, 
+            "produtos": produtos_finais, 
+            "status_conferencia": "Pendente", 
+            "nome_da_carga": nome_da_carga, 
+            "nome_arquivo": nome_arquivo
+        }
 
     except Exception as e:
         import traceback
