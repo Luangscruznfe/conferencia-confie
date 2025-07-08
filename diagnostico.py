@@ -7,32 +7,34 @@ NOME_DO_ARQUIVO_PDF = "15.pdf"
 
 def script_diagnostico_final(caminho_do_pdf):
     """
-    Este script lê um PDF e imprime sua estrutura de texto linha por linha.
+    Lê o PDF e imprime os blocos de texto página por página,
+    linha por linha, mostrando a posição e o conteúdo.
     """
     print(f"--- INICIANDO DIAGNÓSTICO PARA O ARQUIVO: {caminho_do_pdf} ---")
     
     if not os.path.exists(caminho_do_pdf):
-        print(f"\nERRO: Arquivo '{caminho_do_pdf}' não encontrado nesta pasta.")
-        print("Por favor, verifique se o nome do arquivo está correto e se ele está na mesma pasta que este script.")
+        print(f"\n❌ ERRO: Arquivo '{caminho_do_pdf}' não encontrado.")
+        print("Verifique se o nome do arquivo está correto e se está na mesma pasta que este script.")
         return
 
     try:
         documento = fitz.open(caminho_do_pdf)
-        pagina = documento[0]
-        blocos = pagina.get_text("blocks", sort=True)
+
+        for num_pagina, pagina in enumerate(documento, start=1):
+            print(f"\n===== PÁGINA {num_pagina} =====")
+            blocos = pagina.get_text("blocks", sort=True)
+
+            for i, bloco in enumerate(blocos):
+                x0, y0, x1, y1, texto = bloco[:5]
+                texto = texto.replace('\n', ' ').strip()
+                if texto:
+                    print(f"[{i+1:02d}] ({x0:.1f}, {y0:.1f}) → {texto}")
         
-        print("\n--- LINHAS RECONSTRUÍDAS PELO SCRIPT ---")
-        
-        for i, bloco in enumerate(blocos):
-            texto_do_bloco = bloco[4].replace('\n', ' ').strip()
-            print(f"[LINHA {i+1:02d}]: {texto_do_bloco}")
-            
-        print("------------------------------------------\n")
-        print("Fim do diagnóstico.")
-        print("Por favor, copie TODO o resultado acima (a partir de '--- LINHAS RECONSTRUÍDAS ---') e cole na nossa conversa.")
+        print("\n=== FIM DO DIAGNÓSTICO ===")
+        print("Copie TODO o resultado acima (a partir de '===== PÁGINA') e cole aqui na conversa para eu analisar.")
 
     except Exception as e:
-        print(f"\nOcorreu um erro inesperado durante o diagnóstico: {e}")
+        print(f"\n❌ ERRO: Ocorreu uma exceção durante a leitura do PDF:\n{e}")
 
 # --- Execução do Script ---
 if __name__ == "__main__":
