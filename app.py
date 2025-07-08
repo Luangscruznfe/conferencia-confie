@@ -12,6 +12,8 @@ import pandas as pd
 import fitz
 import re
 import sys
+import logging
+
 
 
 # =================================================================
@@ -48,12 +50,8 @@ def init_db():
     cur.close()
     conn.close()
 
-import fitz
-import re
-
-import fitz
-import re
-import sys
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("extrator_pdf")
 
 def extrair_campo_regex(padrao, texto):
     resultado = re.search(padrao, texto)
@@ -61,9 +59,6 @@ def extrair_campo_regex(padrao, texto):
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     try:
-        # Opcional: logar em arquivo (caso esteja em produção)
-        sys.stdout = open("debug_extracao.txt", "a")
-
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
         elif stream:
@@ -115,27 +110,25 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
         texto_completo = " ".join([w[4] for w in todas_as_palavras])
 
-        # Limpa após o total
         if "TOTAL GERAL:" in texto_completo:
             texto_completo = texto_completo.split("TOTAL GERAL:")[0]
 
-        # Divide os produtos por padrão confiável
         produtos_brutos = re.split(r'(?=\d{1,3}\s+\d{12,14})|(?=C/\s*\d{1,3}UN\d*\s*\d{12,14})', texto_completo)
 
         produtos_finais = []
 
-        # === DEBUG LOGS ===
-        print("\n===== DEBUG: INÍCIO DA EXTRAÇÃO DE PRODUTOS =====")
-        print(f"Total de palavras extraídas: {len(todas_as_palavras)}")
-        print(f"Primeiras 500 letras do texto completo:\n{texto_completo[:500]}")
+        # === DEBUG COM LOGGING ===
+        logger.info("===== INÍCIO DA EXTRAÇÃO DE PRODUTOS =====")
+        logger.info(f"Total de palavras extraídas: {len(todas_as_palavras)}")
+        logger.info(f"Texto inicial:\n{texto_completo[:500]}")
 
-        print("\n===== DEBUG: PRODUTOS BRUTOS DETECTADOS =====")
+        logger.info("===== PRODUTOS BRUTOS DETECTADOS =====")
         for i, bloco in enumerate(produtos_brutos):
-            print(f"[{i+1}] {bloco[:100]}...")
+            logger.info(f"[{i+1}] {bloco[:100]}...")
 
-        print(f"Total de blocos identificados como produto bruto: {len(produtos_brutos)}")
+        logger.info(f"Total de blocos identificados: {len(produtos_brutos)}")
 
-        # === PARSER DE PRODUTO ===
+        # PARSER DE PRODUTO
         for produto_str in produtos_brutos:
             linha = produto_str.strip()
             if not re.search(r'\d{12,14}', linha):
@@ -172,11 +165,10 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 "unidades_pacote": unidades_pacote
             })
 
-        print("\n===== DEBUG: PRODUTOS FINAIS =====")
+        logger.info("===== PRODUTOS FINAIS EXTRAÍDOS =====")
         for i, p in enumerate(produtos_finais):
-            print(f"[{i+1}] Nome: {p['produto_nome']} | Quant: {p['quantidade_pedida']} | Valor: {p['valor_total_item']}")
-
-        print(f"Total de produtos extraídos com sucesso: {len(produtos_finais)}")
+            logger.info(f"[{i+1}] Nome: {p['produto_nome']} | Quant: {p['quantidade_pedida']} | Valor: {p['valor_total_item']}")
+        logger.info(f"Total de produtos finais: {len(produtos_finais)}")
 
         documento.close()
 
@@ -193,10 +185,11 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
     except Exception as e:
         import traceback
+        logger.error("Erro crítico durante a extração:")
+        logger.error(traceback.format_exc())
         return {
-            "erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"
+            "erro": f"Uma exceção crítica na extração do PDF: {str(e)}"
         }
-
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
