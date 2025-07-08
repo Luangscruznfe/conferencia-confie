@@ -49,7 +49,6 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
-
 logger = logging.getLogger("extrator_pdf")
 
 def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
@@ -104,15 +103,13 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
             else:
                 y_inicio = 50
 
-            # NOVA LÓGICA CORRIGIDA PARA NÃO CORTAR ÚLTIMO PRODUTO
             y_fim_list = pagina.search_for("TOTAL GERAL")
-            footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-            y_fim = pagina.rect.height
-
-            if y_fim_list and y_fim_list[0].y0 > 300:
+            if y_fim_list:
                 y_fim = y_fim_list[0].y0
-            elif footer_list and footer_list[0].y0 > 300:
-                y_fim = footer_list[0].y0 - 5
+            else:
+                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
+                if footer_list:
+                    y_fim = footer_list[0].y0 - 5
 
             if y_inicio >= y_fim:
                 y_inicio = 50
@@ -153,13 +150,15 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                         for k in range(1, len(palavras_linha)):
                             word_info = palavras_linha[k]
                             word_text = word_info[4]
-                            is_start_of_new_product = (
+                            is_start_of_new_product = False
+                            if (
                                 word_text.isdigit()
                                 and len(word_text) <= 2
                                 and k + 1 < len(palavras_linha)
                                 and palavras_linha[k + 1][4].isdigit()
                                 and len(palavras_linha[k + 1][4]) > 5
-                            )
+                            ):
+                                is_start_of_new_product = True
                             if is_start_of_new_product:
                                 product_chunks.append(current_chunk)
                                 current_chunk = []
@@ -181,7 +180,11 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                         else:
                             valores_parts.append(palavra)
 
-                    if not nome_produto_parts:
+                    # Filtro para evitar rodapés ou linhas inválidas
+                    if not nome_produto_parts or not nome_produto_parts[0].isdigit():
+                        continue
+                    texto_unido = " ".join(nome_produto_parts).lower()
+                    if any(palavra in texto_unido for palavra in ["gentileza", "reclamações", "observações", "vencimentos", "total geral"]):
                         continue
 
                     if (
