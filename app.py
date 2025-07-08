@@ -53,6 +53,45 @@ def init_db():
 
 logger = logging.getLogger("extrator_pdf")
 
+def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
+    try:
+        texto = ""
+        doc = fitz.open(stream=stream, filetype="pdf")
+
+        # Concatena o texto de todas as páginas (opcional, se quiser extrair cliente/vendedor)
+        for page in doc:
+            texto += page.get_text()
+
+        # Extrai número do pedido
+        match_pedido = re.search(r'PEDIDO\s*:? ?(\d{4,10})', texto, re.IGNORECASE)
+        numero_pedido = match_pedido.group(1) if match_pedido else "SEM_NUMERO"
+
+        # Extrai nome do cliente
+        match_cliente = re.search(r'CLIENTE\s*:? ?(.+?)\s{2,}', texto, re.IGNORECASE)
+        nome_cliente = match_cliente.group(1).strip() if match_cliente else "Desconhecido"
+
+        # Extrai nome do vendedor
+        match_vendedor = re.search(r'VEND(?:EDOR)?\s*:? ?(.+?)\s{2,}', texto, re.IGNORECASE)
+        nome_vendedor = match_vendedor.group(1).strip() if match_vendedor else "Desconhecido"
+
+        # Extrai produtos com base na nova função visual
+        produtos = extrair_produtos_por_posicao(stream)
+
+        # Monta o dicionário de resposta
+        return {
+            "numero_pedido": numero_pedido,
+            "nome_cliente": nome_cliente,
+            "vendedor": nome_vendedor,
+            "nome_da_carga": nome_da_carga,
+            "nome_arquivo": nome_arquivo,
+            "status_conferencia": "Pendente",
+            "produtos": produtos
+        }
+
+    except Exception as e:
+        import traceback
+        return {"erro": str(e) + "\n" + traceback.format_exc()}
+
 def extrair_produtos_por_posicao(pdf_bytes):
     import fitz
     import re
@@ -79,7 +118,7 @@ def extrair_produtos_por_posicao(pdf_bytes):
                 unidade = match.group(4)
                 valor_unitario = float(match.group(5).replace(".", "").replace(",", "."))
                 valor_total = float(match.group(6).replace(".", "").replace(",", "."))
-                nome_produto = match.group(7).strip()
+                nome_produto = re.sub(r'\s+', ' ', match.group(7)).strip()
 
                 produtos.append({
                     "item": item,
