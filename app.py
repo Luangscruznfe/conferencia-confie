@@ -95,7 +95,10 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     "vendedor": vendedor
                 }
 
-            palavras_na_tabela = pagina.get_text("words")
+            palavras_na_tabela = [
+                p for p in pagina.get_text("words")
+                if p[1] > 50 and p[3] < pagina.rect.height - 50
+            ]
             if not palavras_na_tabela:
                 continue
 
@@ -116,6 +119,12 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                 linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
             for palavras_linha in linhas_agrupadas:
+                if any(
+                    termo in palavras_linha[0][4].upper()
+                    for termo in ["RUA", "CLIENTE", "CNPJ", "CIDADE", "CONTATO", "FORMA", "TIPO"]
+                ):
+                    continue
+
                 product_chunks = []
                 current_chunk = []
                 if palavras_linha:
@@ -205,6 +214,7 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
     except Exception as e:
         import traceback
         return {"erro": f"Erro na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
+
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
