@@ -291,7 +291,7 @@ def upload_files(nome_da_carga):
 def api_cargas():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT DISTINCT nome_da_carga FROM pedidos WHERE nome_da_carga IS NOT NULL ORDER BY nome_da_carga;")
+    cur.execute("SELECT * FROM pedidos WHERE nome_da_carga = %s ORDER BY id DESC;", (nome_da_carga,))
     cargas = [row[0] for row in cur.fetchall()]
     cur.close()
     conn.close()
