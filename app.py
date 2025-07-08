@@ -138,7 +138,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             valor_total_item = precos[-1].replace('R$', '').strip() if precos else "0.00"
             temp_str = re.sub(r'R\$\s*[\d,.]+', '', linha).strip()
 
-            match = re.match(r'(C/\s*\d{1,3}UN)?\s*(\d{12,14})\s*(\d+)?\s*(UN|DP|FD|PC|CJ|CX|ED)?\s*(.*)', temp_str)
+            match = re.match(r'(?:\d+\s+)?(C/\s*\d{1,3}UN)?\s*(\d{12,14})\s+(\d+)\s+(UN|DP|FD|PC|CJ|CX|ED)\s+(.*)', temp_str)
             if not match:
                 continue
 
