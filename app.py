@@ -51,6 +51,9 @@ def init_db():
     conn.close()
 
 def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
+    import fitz
+    import re
+
     try:
         documento = fitz.open(stream=stream, filetype="pdf")
         produtos_finais = []
@@ -63,11 +66,9 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
                 texto_completo_pagina = pagina.get_text("text")
-
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E":
                     numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
-
                 nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
 
                 vendedor = "N/E"
@@ -75,12 +76,7 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     vendedor_rect_list = pagina.search_for("Vendedor")
                     if vendedor_rect_list:
                         vendedor_rect = vendedor_rect_list[0]
-                        search_area = fitz.Rect(
-                            vendedor_rect.x0 - 15,
-                            vendedor_rect.y1,
-                            vendedor_rect.x1 + 15,
-                            vendedor_rect.y1 + 20
-                        )
+                        search_area = fitz.Rect(vendedor_rect.x0 - 15, vendedor_rect.y1, vendedor_rect.x1 + 15, vendedor_rect.y1 + 20)
                         vendedor_words = pagina.get_text("words", clip=search_area)
                         if vendedor_words:
                             vendedor = vendedor_words[0][4]
@@ -93,7 +89,6 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     "vendedor": vendedor
                 }
 
-            # ========== Definir as margens da área útil ==========
             y_inicio = 0
             y_fim = pagina.rect.height
 
@@ -101,7 +96,7 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
             if y_inicio_list:
                 y_inicio = y_inicio_list[0].y1
             else:
-                y_inicio = 50  # Fallback padrão
+                y_inicio = 50
 
             y_fim_list = pagina.search_for("TOTAL GERAL")
             if y_fim_list:
@@ -111,18 +106,11 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                 if footer_list:
                     y_fim = footer_list[0].y0 - 5
 
-            # Se os limites estiverem ruins, usa toda a página
-            if y_fim <= y_inicio or y_fim == 0:
-                y_inicio = 0
+            if y_inicio >= y_fim:
+                y_inicio = 50
                 y_fim = pagina.rect.height
 
-            X_COLUNA_PRODUTO_FIM = 340
-            X_COLUNA_QUANTIDADE_FIM = 450
-
-            palavras_na_tabela = [
-                p for p in pagina.get_text("words")
-                if p[1] > y_inicio and p[3] < y_fim
-            ]
+            palavras_na_tabela = [p for p in pagina.get_text("words") if p[1] > y_inicio and p[3] < y_fim]
             if not palavras_na_tabela:
                 continue
 
@@ -143,78 +131,55 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                 linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
             for palavras_linha in linhas_agrupadas:
-                product_chunks = []
-                current_chunk = []
-                if palavras_linha:
-                    if len(palavras_linha) > 1 and palavras_linha[0][4].isdigit() and len(palavras_linha[0][4]) <= 2:
-                        current_chunk.append(palavras_linha[0])
-                        for k in range(1, len(palavras_linha)):
-                            word_info = palavras_linha[k]
-                            word_text = word_info[4]
-                            is_start_of_new_product = False
-                            if (
-                                word_text.isdigit()
-                                and len(word_text) <= 2
-                                and k + 1 < len(palavras_linha)
-                                and palavras_linha[k + 1][4].isdigit()
-                                and len(palavras_linha[k + 1][4]) > 5
-                            ):
-                                is_start_of_new_product = True
-                            if is_start_of_new_product:
-                                product_chunks.append(current_chunk)
-                                current_chunk = []
-                            current_chunk.append(word_info)
-                        product_chunks.append(current_chunk)
+                # NOVA LÓGICA MAIS FLEXÍVEL
+                if not palavras_linha:
+                    continue
+
+                texto_linha = " ".join(p[4] for p in palavras_linha)
+                contem_valores = bool(re.search(r'R\$\s*\d{1,3},\d{2}', texto_linha))
+                contem_codigo = bool(re.search(r'\d{10,}', texto_linha))
+                contem_c_un = "C/" in texto_linha.upper()
+
+                if not (contem_valores and contem_codigo and contem_c_un):
+                    continue
+
+                nome_produto_parts = []
+                quantidade_parts = []
+                valores_parts = []
+
+                for x0, y0, x1, y1, palavra, *_ in palavras_linha:
+                    if x0 < 340:
+                        nome_produto_parts.append(palavra)
+                    elif x0 < 450:
+                        quantidade_parts.append(palavra)
                     else:
-                        product_chunks.append(palavras_linha)
+                        valores_parts.append(palavra)
 
-                for chunk in product_chunks:
-                    nome_produto_parts = []
-                    quantidade_parts = []
-                    valores_parts = []
+                if not nome_produto_parts:
+                    continue
 
-                    for x0, y0, x1, y1, palavra, *_ in chunk:
-                        if x0 < X_COLUNA_PRODUTO_FIM:
-                            nome_produto_parts.append(palavra)
-                        elif x0 < X_COLUNA_QUANTIDADE_FIM:
-                            quantidade_parts.append(palavra)
-                        else:
-                            valores_parts.append(palavra)
+                nome_produto_final = " ".join(nome_produto_parts[2:]) if nome_produto_parts[0].isdigit() else " ".join(nome_produto_parts)
+                quantidade_completa_str = " ".join(quantidade_parts)
 
-                    if not nome_produto_parts:
-                        continue
+                valor_total_item = "0.00"
+                if valores_parts:
+                    match_valor = re.search(r'[\d,.]+', valores_parts[-1])
+                    if match_valor:
+                        valor_total_item = match_valor.group(0)
 
-                    if (
-                        len(nome_produto_parts) > 1
-                        and nome_produto_parts[0].isdigit()
-                        and (len(nome_produto_parts[0]) <= 2 or nome_produto_parts[1].isdigit())
-                    ):
-                        nome_produto_final = " ".join(nome_produto_parts[2:]) if len(nome_produto_parts) > 2 else " ".join(nome_produto_parts[1:])
-                    else:
-                        nome_produto_final = " ".join(nome_produto_parts)
+                unidades_pacote = 1
+                match_unidades = re.search(r'C/\s*(\d+)', quantidade_completa_str, re.IGNORECASE)
+                if match_unidades:
+                    unidades_pacote = int(match_unidades.group(1))
 
-                    quantidade_completa_str = " ".join(quantidade_parts)
-
-                    valor_total_item = "0.00"
-                    if valores_parts:
-                        match_valor = re.search(r'[\d,.]+', valores_parts[-1])
-                        if match_valor:
-                            valor_total_item = match_valor.group(0)
-
-                    unidades_pacote = 1
-                    match_unidades = re.search(r'C/\s*(\d+)', quantidade_completa_str, re.IGNORECASE)
-                    if match_unidades:
-                        unidades_pacote = int(match_unidades.group(1))
-
-                    if nome_produto_final and quantidade_completa_str:
-                        produtos_finais.append({
-                            "produto_nome": nome_produto_final,
-                            "quantidade_pedida": quantidade_completa_str,
-                            "quantidade_entregue": None,
-                            "status": "Pendente",
-                            "valor_total_item": valor_total_item.replace(',', '.'),
-                            "unidades_pacote": unidades_pacote
-                        })
+                produtos_finais.append({
+                    "produto_nome": nome_produto_final,
+                    "quantidade_pedida": quantidade_completa_str,
+                    "quantidade_entregue": None,
+                    "status": "Pendente",
+                    "valor_total_item": valor_total_item.replace(',', '.'),
+                    "unidades_pacote": unidades_pacote
+                })
 
         documento.close()
 
