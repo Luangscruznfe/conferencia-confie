@@ -51,87 +51,49 @@ def init_db():
     conn.close()
 
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("extrator_pdf")
 
-def extrair_campo_regex(padrao, texto):
-    resultado = re.search(padrao, texto)
-    return resultado.group(1).strip() if resultado else "N/E"
+def extrair_produtos_por_posicao(pdf_bytes):
+    import fitz
+    import re
 
-def extrair_produtos(texto):
-    produtos_extraidos = []
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    produtos = []
 
-    # Regex adaptado para capturar linhas com estrutura padrão de item
-    padrao = re.compile(
-        r'(\d+)\s+(\d{13})\s+(\d+)\s+(UN|FD|CJ|DP)\s+R\$ ([\d,.]+)\s+R\$ ([\d,.]+)\s+(.+?)(?=\s+\d+\s+\d{13}|$)'
-    )
+    for page in doc:
+        blocks = page.get_text("blocks")
+        linhas = sorted([b for b in blocks if b[4].strip()], key=lambda b: (b[1], b[0]))  # ordena por posição vertical e horizontal
 
-    for match in padrao.finditer(texto):
-        try:
-            quantidade = int(match.group(3))
-            unidade = match.group(4)
-            valor_unitario = float(match.group(5).replace('.', '').replace(',', '.'))
-            valor_total = float(match.group(6).replace('.', '').replace(',', '.'))
-            nome = match.group(7).strip()
+        for linha in linhas:
+            texto = linha[4].strip()
 
-            # Captura unidades por pacote, se tiver "C/ xxUN" no nome
-            unidades_pacote = None
-            match_c = re.search(r'C/\s*(\d+)\s*UN', nome, re.IGNORECASE)
-            if match_c:
-                unidades_pacote = int(match_c.group(1))
+            # Regex baseado na estrutura do PDF com colunas visuais
+            padrao = re.compile(
+                r"(\d{1,3})\s+(\d{13})\s+(\d+)\s+(UN|FD|CJ|DP)\s+R\$?\s*([\d,.]+)\s+R\$?\s*([\d,.]+)\s+(.+)"
+            )
+            match = padrao.match(texto)
+            if match:
+                item = int(match.group(1))
+                codigo_barras = match.group(2)
+                quantidade = int(match.group(3))
+                unidade = match.group(4)
+                valor_unitario = float(match.group(5).replace(".", "").replace(",", "."))
+                valor_total = float(match.group(6).replace(".", "").replace(",", "."))
+                nome_produto = match.group(7).strip()
 
-            produtos_extraidos.append({
-                "produto_nome": nome,
-                "quantidade": quantidade,
-                "unidade": unidade,
-                "valor_unitario": valor_unitario,
-                "valor_total_item": valor_total,
-                "unidades_pacote": unidades_pacote
-            })
-        except Exception as e:
-            logger.warning(f"Falha ao extrair produto: {e}")
+                produtos.append({
+                    "item": item,
+                    "codigo_barras": codigo_barras,
+                    "quantidade": quantidade,
+                    "unidade": unidade,
+                    "valor_unitario": valor_unitario,
+                    "valor_total": valor_total,
+                    "nome_produto": nome_produto,
+                    "unidades_pacote": None,
+                    "status": "Pendente"
+                })
 
-    logger.info(f"Produtos extraídos: {json.dumps(produtos_extraidos, indent=2, ensure_ascii=False)}")
-    return produtos_extraidos
-
-def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
-    try:
-        logger.info("===== INÍCIO DA EXTRAÇÃO DE PRODUTOS =====")
-        texto_pdf = ""
-
-        with fitz.open(stream=stream, filetype="pdf") as doc:
-            for page in doc:
-                texto_pdf += page.get_text()
-
-        if not texto_pdf.strip():
-            return {"erro": "O PDF está vazio ou ilegível."}
-
-        logger.info(f"Total de palavras extraídas: {len(texto_pdf.split())}")
-
-        produtos = extrair_produtos(texto_pdf)
-
-        if not produtos:
-            return {"erro": "Nenhum produto pôde ser extraído do PDF."}
-
-        logger.info(f"Total de produtos extraídos: {len(produtos)}")
-
-        numero_pedido = extrair_campo_regex(r'Pedido\s*[:\-]?\s*(\d+)', texto_pdf)
-        nome_cliente = extrair_campo_regex(r'Cliente\s*[:\-]?\s*(.+?)\s+\d+', texto_pdf)
-        vendedor = extrair_campo_regex(r'Vendedor\s*[:\-]?\s*(.+)', texto_pdf)
-
-        return {
-            "numero_pedido": numero_pedido,
-            "nome_cliente": nome_cliente,
-            "vendedor": vendedor,
-            "nome_da_carga": nome_da_carga,
-            "nome_arquivo": nome_arquivo,
-            "produtos": produtos,
-            "status_conferencia": "Pendente"
-        }
-    except Exception as e:
-        logger.exception("Erro ao extrair dados do PDF")
-        return {"erro": str(e)}
-
+    return produtos
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
