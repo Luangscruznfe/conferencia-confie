@@ -58,24 +58,27 @@ def extrair_campo_regex(padrao, texto):
     resultado = re.search(padrao, texto)
     return resultado.group(1).strip() if resultado else "N/E"
 
-
 def extrair_produtos(texto):
-    linhas = texto.split('\n')
     produtos_extraidos = []
 
-    # Regex robusto para capturar os produtos na linha formatada
+    # Regex adaptado para capturar linhas com estrutura padrão de item
     padrao = re.compile(
-        r"(\d+)\s+(\d{13})\s+(\d+)\s+(UN|FD|CJ|DP)\s+R\$ ([\d,.]+)\s+R\$ ([\d,.]+)\s+(.+?)(?:\s+C/\s*(\d+)\s*UN)?(?=\s+\d+\s+\d{13}|$)"
+        r'(\d+)\s+(\d{13})\s+(\d+)\s+(UN|FD|CJ|DP)\s+R\$ ([\d,.]+)\s+R\$ ([\d,.]+)\s+(.+?)(?=\s+\d+\s+\d{13}|$)'
     )
 
-    for linha in linhas:
-        for match in padrao.finditer(linha):
+    for match in padrao.finditer(texto):
+        try:
             quantidade = int(match.group(3))
             unidade = match.group(4)
             valor_unitario = float(match.group(5).replace('.', '').replace(',', '.'))
             valor_total = float(match.group(6).replace('.', '').replace(',', '.'))
             nome = match.group(7).strip()
-            unidades_pacote = int(match.group(8)) if match.group(8) else None
+
+            # Captura unidades por pacote, se tiver "C/ xxUN" no nome
+            unidades_pacote = None
+            match_c = re.search(r'C/\s*(\d+)\s*UN', nome, re.IGNORECASE)
+            if match_c:
+                unidades_pacote = int(match_c.group(1))
 
             produtos_extraidos.append({
                 "produto_nome": nome,
@@ -85,15 +88,17 @@ def extrair_produtos(texto):
                 "valor_total_item": valor_total,
                 "unidades_pacote": unidades_pacote
             })
+        except Exception as e:
+            logger.warning(f"Falha ao extrair produto: {e}")
 
     logger.info(f"Produtos extraídos: {json.dumps(produtos_extraidos, indent=2, ensure_ascii=False)}")
     return produtos_extraidos
-
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
     try:
         logger.info("===== INÍCIO DA EXTRAÇÃO DE PRODUTOS =====")
         texto_pdf = ""
+
         with fitz.open(stream=stream, filetype="pdf") as doc:
             for page in doc:
                 texto_pdf += page.get_text()
@@ -126,7 +131,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
     except Exception as e:
         logger.exception("Erro ao extrair dados do PDF")
         return {"erro": str(e)}
-
 
 
 
