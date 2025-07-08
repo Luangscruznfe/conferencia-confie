@@ -67,83 +67,81 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         else:
             return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
 
-        # --- Cabeçalho ---
-        dados_cabecalho = {}
+        # Cabeçalho
         pagina_um = documento[0]
-        texto_completo_pagina = pagina_um.get_text("text")
-        numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
+        texto_pagina = pagina_um.get_text("text")
+        numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_pagina)
         nome_cliente = "N/E"
         try:
-            search_list = pagina_um.search_for("Nome Fant.:")
-            if search_list:
-                rect = search_list[0]
-                search_area = fitz.Rect(rect.x1, rect.y0, pagina_um.rect.width - 20, rect.y1 + 5)
-                nome_cliente = pagina_um.get_text("text", clip=search_area).strip()
+            search = pagina_um.search_for("Nome Fant.:")
+            if search:
+                rect = search[0]
+                area = fitz.Rect(rect.x1, rect.y0, pagina_um.rect.width - 20, rect.y1 + 5)
+                nome_cliente = pagina_um.get_text("text", clip=area).strip()
         except: pass
         if nome_cliente == "N/E":
             try:
-                search_list = pagina_um.search_for("Cliente:")
-                if len(search_list) > 1:
-                    rect = search_list[1]
-                    search_area = fitz.Rect(rect.x1, rect.y0, pagina_um.rect.width - 20, rect.y1 + 5)
-                    nome_cliente = pagina_um.get_text("text", clip=search_area).strip().split('\n')[0]
+                search = pagina_um.search_for("Cliente:")
+                if len(search) > 1:
+                    rect = search[1]
+                    area = fitz.Rect(rect.x1, rect.y0, pagina_um.rect.width - 20, rect.y1 + 5)
+                    nome_cliente = pagina_um.get_text("text", clip=area).strip().split('\n')[0]
             except: pass
         vendedor = "N/E"
         try:
-            search_list = pagina_um.search_for("Vendedor")
-            if search_list:
-                rect = search_list[0]
-                search_area = fitz.Rect(rect.x0 - 20, rect.y1, rect.x1 + 80, rect.y1 + 20)
-                vendedor_words = pagina_um.get_text("words", clip=search_area)
-                if vendedor_words:
-                    vendedor = sorted(vendedor_words, key=lambda w: w[0])[0][4]
+            search = pagina_um.search_for("Vendedor")
+            if search:
+                rect = search[0]
+                area = fitz.Rect(rect.x0 - 20, rect.y1, rect.x1 + 80, rect.y1 + 20)
+                words = pagina_um.get_text("words", clip=area)
+                if words:
+                    vendedor = sorted(words, key=lambda w: w[0])[0][4]
         except: pass
+
         dados_cabecalho = {
             "numero_pedido": numero_pedido,
             "nome_cliente": nome_cliente,
             "vendedor": vendedor
         }
 
-        # --- Leitura das palavras de todas as páginas ---
+        # Leitura das palavras de todas as páginas
         todas_as_palavras = []
         for page in documento:
             todas_as_palavras.extend(page.get_text("words"))
 
         texto_completo = " ".join([w[4] for w in todas_as_palavras])
-
         if "TOTAL GERAL:" in texto_completo:
             texto_completo = texto_completo.split("TOTAL GERAL:")[0]
 
-        produtos_brutos = re.split(r'(?=\d{1,3}\s+\d{12,14})|(?=C/\s*\d{1,3}UN\d*\s*\d{12,14})', texto_completo)
+        # Quebra por padrão confiável
+        produtos_brutos = re.split(r'(?=\d{1,3}\s+\d{12,14})|(?=C/\s*\d{1,3}UN\s*\d{12,14})', texto_completo)
 
         produtos_finais = []
 
-        # === DEBUG COM LOGGING ===
         logger.info("===== INÍCIO DA EXTRAÇÃO DE PRODUTOS =====")
         logger.info(f"Total de palavras extraídas: {len(todas_as_palavras)}")
-        logger.info(f"Texto inicial:\n{texto_completo[:500]}")
         logger.info("===== PRODUTOS BRUTOS DETECTADOS =====")
         for i, bloco in enumerate(produtos_brutos):
             logger.info(f"[{i+1}] {bloco[:100]}...")
         logger.info(f"Total de blocos identificados: {len(produtos_brutos)}")
 
-        # PARSER DE PRODUTO
         for produto_str in produtos_brutos:
             linha = produto_str.strip()
             if not re.search(r'\d{12,14}', linha):
                 continue
 
-            precos = re.findall(r'R\$\s*[\d,.]+', linha)
+            precos = re.findall(r'R\$\s*[\d.,]+', linha)
             valor_total_item = precos[-1].replace('R$', '').strip() if precos else "0.00"
-            temp_str = re.sub(r'R\$\s*[\d,.]+', '', linha).strip()
+            valor_total_item = valor_total_item.replace('.', '').replace(',', '.') if ',' in valor_total_item else valor_total_item
 
-            # REGEX MELHORADA
+            temp_str = re.sub(r'R\$\s*[\d.,]+', '', linha).strip()
+
             match = re.match(r'(?:\d+\s+)?(C/\s*\d{1,3}UN)?\s*(\d{12,14})\s+(\d+)\s+(UN|DP|FD|PC|CJ|CX|ED)\s+(.*)', temp_str)
             if not match:
                 continue
 
             qtd_embalagem_raw, cod_barras, qtd, tipo_unidade, restante = match.groups()
-            quantidade_pedida = f"{qtd} {tipo_unidade}".strip()
+            quantidade_pedida = f"{qtd} {tipo_unidade}"
             unidades_pacote = 1
 
             # C/ XXUN antes do código
@@ -151,14 +149,15 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 match_unidades = re.search(r'C/\s*(\d+)', qtd_embalagem_raw)
                 if match_unidades:
                     unidades_pacote = int(match_unidades.group(1))
-                    quantidade_pedida = f"{quantidade_pedida} ({qtd_embalagem_raw.strip()})"
+                    quantidade_pedida += f" ({qtd_embalagem_raw.strip()})"
+
+            nome_produto_final = restante.strip()
 
             # C/ XXUN no final do nome
-            match_unidades_finais = re.search(r'C/\s*(\d+)\s*UN?', restante, re.IGNORECASE)
+            match_unidades_finais = re.search(r'\bC/\s*(\d+)\s*UN?\b', nome_produto_final, re.IGNORECASE)
             if match_unidades_finais:
                 unidades_pacote = int(match_unidades_finais.group(1))
 
-            nome_produto_final = restante.strip()
             if len(nome_produto_final) < 3:
                 continue
 
@@ -167,7 +166,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 "quantidade_pedida": quantidade_pedida,
                 "quantidade_entregue": None,
                 "status": "Pendente",
-                "valor_total_item": valor_total_item.replace(',', '.'),
+                "valor_total_item": valor_total_item,
                 "unidades_pacote": unidades_pacote
             })
 
@@ -178,7 +177,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
         documento.close()
 
-        if not produtos_finais: 
+        if not produtos_finais:
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
 
         return {
@@ -193,10 +192,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         import traceback
         logger.error("Erro crítico durante a extração:")
         logger.error(traceback.format_exc())
-        return {
-            "erro": f"Uma exceção crítica na extração do PDF: {str(e)}"
-        }
-
+        return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}"}
 
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
