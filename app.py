@@ -50,20 +50,23 @@ def init_db():
     cur.close()
     conn.close()
 
-
 def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
+    import fitz
+    import re
+    import traceback
+
     try:
         documento = fitz.open(stream=stream, filetype="pdf")
         produtos_finais = []
         dados_cabecalho = {}
 
         for i, pagina in enumerate(documento):
-            texto_completo_pagina = pagina.get_text("text")
-
             if i == 0:
                 def extrair_campo_regex(pattern, text):
                     match = re.search(pattern, text, re.DOTALL)
                     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
+
+                texto_completo_pagina = pagina.get_text("text")
 
                 numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
                 if numero_pedido == "N/E":
@@ -94,27 +97,29 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     "vendedor": vendedor
                 }
 
-            # Independente da página: extrair produtos
-            y_inicio = 0
+            # ====================
+            # GARANTIR DELIMITADORES
+            # ====================
+            y_inicio = 50
             y_fim = pagina.rect.height
 
-            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            if y_inicio_list:
-                y_inicio = y_inicio_list[0].y1
-            else:
-                y_inicio = 50
+            inicio_lista = pagina.search_for("ITEM CÓD. BARRAS")
+            if inicio_lista:
+                y_inicio = inicio_lista[0].y1
 
-            y_fim_list = pagina.search_for("TOTAL GERAL")
-            if y_fim_list:
-                y_fim = y_fim_list[0].y0
+            fim_lista = pagina.search_for("TOTAL GERAL")
+            if fim_lista:
+                y_fim = fim_lista[0].y0
             else:
-                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
-                if footer_list:
-                    y_fim = footer_list[0].y0 - 5
+                rodape_lista = pagina.search_for("POR GENTILEZA CONFERIR")
+                if rodape_lista:
+                    y_fim = rodape_lista[0].y0 - 5
 
-            if y_inicio >= y_fim:
+            if y_inicio >= y_fim or y_fim - y_inicio < 50:
                 y_inicio = 50
                 y_fim = pagina.rect.height
+
+            print(f"[PÁGINA {i+1}] Extraindo entre y={y_inicio:.2f} e y={y_fim:.2f}")
 
             X_COLUNA_PRODUTO_FIM = 340
             X_COLUNA_QUANTIDADE_FIM = 450
@@ -151,10 +156,11 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                             word_info = palavras_linha[k]
                             word_text = word_info[4]
                             is_start_of_new_product = (
-                                word_text.isdigit() and len(word_text) <= 2 and
-                                k + 1 < len(palavras_linha) and
-                                palavras_linha[k + 1][4].isdigit() and
-                                len(palavras_linha[k + 1][4]) > 5
+                                word_text.isdigit()
+                                and len(word_text) <= 2
+                                and k + 1 < len(palavras_linha)
+                                and palavras_linha[k + 1][4].isdigit()
+                                and len(palavras_linha[k + 1][4]) > 5
                             )
                             if is_start_of_new_product:
                                 product_chunks.append(current_chunk)
@@ -209,7 +215,8 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                             "quantidade_entregue": None,
                             "status": "Pendente",
                             "valor_total_item": valor_total_item.replace(',', '.'),
-                            "unidades_pacote": unidades_pacote
+                            "unidades_pacote": unidades_pacote,
+                            "pagina_origem": i + 1  # debug opcional
                         })
 
         documento.close()
@@ -226,7 +233,6 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
         }
 
     except Exception as e:
-        import traceback
         return {"erro": f"Erro na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
 
 
