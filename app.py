@@ -112,10 +112,8 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     y_fim = footer_list[0].y0 - 5
 
             if y_inicio >= y_fim:
-		y_inicio = 50
-    		y_fim = pagina.rect.height
-
-
+                y_inicio = 50
+                y_fim = pagina.rect.height
 
             X_COLUNA_PRODUTO_FIM = 340
             X_COLUNA_QUANTIDADE_FIM = 450
