@@ -50,6 +50,7 @@ def init_db():
     cur.close()
     conn.close()
 
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("extrator_pdf")
 
@@ -121,11 +122,9 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         logger.info("===== INÍCIO DA EXTRAÇÃO DE PRODUTOS =====")
         logger.info(f"Total de palavras extraídas: {len(todas_as_palavras)}")
         logger.info(f"Texto inicial:\n{texto_completo[:500]}")
-
         logger.info("===== PRODUTOS BRUTOS DETECTADOS =====")
         for i, bloco in enumerate(produtos_brutos):
             logger.info(f"[{i+1}] {bloco[:100]}...")
-
         logger.info(f"Total de blocos identificados: {len(produtos_brutos)}")
 
         # PARSER DE PRODUTO
@@ -138,19 +137,26 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             valor_total_item = precos[-1].replace('R$', '').strip() if precos else "0.00"
             temp_str = re.sub(r'R\$\s*[\d,.]+', '', linha).strip()
 
+            # REGEX MELHORADA
             match = re.match(r'(?:\d+\s+)?(C/\s*\d{1,3}UN)?\s*(\d{12,14})\s+(\d+)\s+(UN|DP|FD|PC|CJ|CX|ED)\s+(.*)', temp_str)
             if not match:
                 continue
 
             qtd_embalagem_raw, cod_barras, qtd, tipo_unidade, restante = match.groups()
-            quantidade_pedida = f"{qtd or '1'} {tipo_unidade or 'UN'}".strip()
+            quantidade_pedida = f"{qtd} {tipo_unidade}".strip()
             unidades_pacote = 1
 
+            # C/ XXUN antes do código
             if qtd_embalagem_raw:
                 match_unidades = re.search(r'C/\s*(\d+)', qtd_embalagem_raw)
                 if match_unidades:
                     unidades_pacote = int(match_unidades.group(1))
                     quantidade_pedida = f"{quantidade_pedida} ({qtd_embalagem_raw.strip()})"
+
+            # C/ XXUN no final do nome
+            match_unidades_finais = re.search(r'C/\s*(\d+)\s*UN?', restante, re.IGNORECASE)
+            if match_unidades_finais:
+                unidades_pacote = int(match_unidades_finais.group(1))
 
             nome_produto_final = restante.strip()
             if len(nome_produto_final) < 3:
