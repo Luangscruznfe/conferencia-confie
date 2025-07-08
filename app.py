@@ -58,6 +58,8 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
         documento = fitz.open(stream=stream, filetype="pdf")
         produtos_finais = []
         dados_cabecalho = {}
+        
+        inicio_extracao = False
 
         for i, pagina in enumerate(documento):
             if i == 0:
@@ -95,38 +97,59 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     "vendedor": vendedor
                 }
 
-            palavras = pagina.get_text("words")
-
-            inicio_tabela = 0
-            fim_tabela = pagina.rect.height
-
-            for bloco in pagina.search_for("ITEM CÓD. BARRAS PRODUTO"):
-                inicio_tabela = bloco.y1
-            for bloco in pagina.search_for("**POR GENTILEZA"):
-                fim_tabela = bloco.y0
-
-            palavras_na_tabela = [p for p in palavras if inicio_tabela <= p[1] <= fim_tabela]
+            palavras_na_tabela = pagina.get_text("words")
             if not palavras_na_tabela:
                 continue
 
             palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
 
             linhas_agrupadas = []
-            if palavras_na_tabela:
-                linha_atual = [palavras_na_tabela[0]]
-                y_referencia = palavras_na_tabela[0][1]
-                for j in range(1, len(palavras_na_tabela)):
-                    palavra = palavras_na_tabela[j]
-                    if abs(palavra[1] - y_referencia) < 5:
-                        linha_atual.append(palavra)
-                    else:
-                        linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
-                        linha_atual = [palavra]
-                        y_referencia = palavra[1]
-                linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+            linha_atual = [palavras_na_tabela[0]]
+            y_referencia = palavras_na_tabela[0][1]
+            for j in range(1, len(palavras_na_tabela)):
+                palavra = palavras_na_tabela[j]
+                if abs(palavra[1] - y_referencia) < 5:
+                    linha_atual.append(palavra)
+                else:
+                    linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+                    linha_atual = [palavra]
+                    y_referencia = palavra[1]
+            linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
             for palavras_linha in linhas_agrupadas:
-                product_chunks = [palavras_linha]
+                texto_linha = " ".join([p[4] for p in palavras_linha])
+                if "ITEM CÓD. BARRAS" in texto_linha:
+                    inicio_extracao = True
+                    continue
+                elif "**POR GENTILEZA" in texto_linha:
+                    inicio_extracao = False
+                    continue
+                if not inicio_extracao:
+                    continue
+
+                product_chunks = []
+                current_chunk = []
+                if len(palavras_linha) > 1 and palavras_linha[0][4].isdigit() and len(palavras_linha[0][4]) <= 2:
+                    current_chunk.append(palavras_linha[0])
+                    for k in range(1, len(palavras_linha)):
+                        word_info = palavras_linha[k]
+                        word_text = word_info[4]
+                        is_start_of_new_product = False
+                        if (
+                            word_text.isdigit()
+                            and len(word_text) <= 2
+                            and k + 1 < len(palavras_linha)
+                            and palavras_linha[k + 1][4].isdigit()
+                            and len(palavras_linha[k + 1][4]) > 5
+                        ):
+                            is_start_of_new_product = True
+                        if is_start_of_new_product:
+                            product_chunks.append(current_chunk)
+                            current_chunk = []
+                        current_chunk.append(word_info)
+                    product_chunks.append(current_chunk)
+                else:
+                    product_chunks.append(palavras_linha)
 
                 for chunk in product_chunks:
                     nome_produto_parts = []
@@ -144,7 +167,15 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     if not nome_produto_parts:
                         continue
 
-                    nome_produto_final = " ".join(nome_produto_parts)
+                    if (
+                        len(nome_produto_parts) > 2
+                        and nome_produto_parts[0].isdigit()
+                        and len(nome_produto_parts[0]) <= 2
+                    ):
+                        nome_produto_final = " ".join(nome_produto_parts[1:])
+                    else:
+                        nome_produto_final = " ".join(nome_produto_parts)
+
                     quantidade_completa_str = " ".join(quantidade_parts)
 
                     valor_total_item = "0.00"
@@ -184,6 +215,7 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
     except Exception as e:
         import traceback
         return {"erro": f"Erro na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
+
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
