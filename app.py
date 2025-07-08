@@ -11,6 +11,7 @@ from datetime import datetime
 import pandas as pd
 import fitz
 import re
+import sys
 
 
 # =================================================================
@@ -50,12 +51,19 @@ def init_db():
 import fitz
 import re
 
+import fitz
+import re
+import sys
+
 def extrair_campo_regex(padrao, texto):
     resultado = re.search(padrao, texto)
     return resultado.group(1).strip() if resultado else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
     try:
+        # Opcional: logar em arquivo (caso esteja em produção)
+        sys.stdout = open("debug_extracao.txt", "a")
+
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
         elif stream:
@@ -116,19 +124,27 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
 
         produtos_finais = []
 
+        # === DEBUG LOGS ===
+        print("\n===== DEBUG: INÍCIO DA EXTRAÇÃO DE PRODUTOS =====")
+        print(f"Total de palavras extraídas: {len(todas_as_palavras)}")
+        print(f"Primeiras 500 letras do texto completo:\n{texto_completo[:500]}")
+
+        print("\n===== DEBUG: PRODUTOS BRUTOS DETECTADOS =====")
+        for i, bloco in enumerate(produtos_brutos):
+            print(f"[{i+1}] {bloco[:100]}...")
+
+        print(f"Total de blocos identificados como produto bruto: {len(produtos_brutos)}")
+
+        # === PARSER DE PRODUTO ===
         for produto_str in produtos_brutos:
             linha = produto_str.strip()
-
-            # Verifica se é uma linha de produto válida
             if not re.search(r'\d{12,14}', linha):
                 continue
 
-            # Extrai valores e retira preços
             precos = re.findall(r'R\$\s*[\d,.]+', linha)
             valor_total_item = precos[-1].replace('R$', '').strip() if precos else "0.00"
             temp_str = re.sub(r'R\$\s*[\d,.]+', '', linha).strip()
 
-            # Extrai código de barras e quantidade bruta
             match = re.match(r'(C/\s*\d{1,3}UN)?\s*(\d{12,14})\s*(\d+)?\s*(UN|DP|FD|PC|CJ|CX|ED)?\s*(.*)', temp_str)
             if not match:
                 continue
@@ -156,9 +172,15 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 "unidades_pacote": unidades_pacote
             })
 
+        print("\n===== DEBUG: PRODUTOS FINAIS =====")
+        for i, p in enumerate(produtos_finais):
+            print(f"[{i+1}] Nome: {p['produto_nome']} | Quant: {p['quantidade_pedida']} | Valor: {p['valor_total_item']}")
+
+        print(f"Total de produtos extraídos com sucesso: {len(produtos_finais)}")
+
         documento.close()
 
-        if not produtos_finais:
+        if not produtos_finais: 
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
 
         return {
@@ -174,6 +196,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         return {
             "erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"
         }
+
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
