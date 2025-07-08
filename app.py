@@ -82,7 +82,7 @@ def extrair_produtos(texto):
 
     for p in produtos:
         match_nome = re.search(r'R\$ [\d,.]+ R\$ [\d,.]+ (.+)', p)
-        match_quant = re.search(r'(\d+)\s+(UN|FD|CJ|DP)\b')
+        match_quant = re.search(r'(\d+)\s+(UN|FD|CJ|DP)\b', p)
         match_valor = re.findall(r'R\$ ([\d,.]+)', p)
 
         if match_nome and match_quant and match_valor:
