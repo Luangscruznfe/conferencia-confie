@@ -88,7 +88,6 @@ def extrair_produtos(texto):
 
     logger.info(f"Produtos extraídos: {json.dumps(produtos_extraidos, indent=2, ensure_ascii=False)}")
     return produtos_extraidos
-	print("Produtos extraídos:", json.dumps(produtos_extraidos, indent=2, ensure_ascii=False))
 
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
