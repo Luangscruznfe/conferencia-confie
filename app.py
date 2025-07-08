@@ -70,7 +70,7 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                 if numero_pedido == "N/E":
                     numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
 
-                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
+                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\\. Pgto:|\n)", texto_completo_pagina)
 
                 vendedor = "N/E"
                 try:
@@ -95,33 +95,7 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     "vendedor": vendedor
                 }
 
-            # NOVO: não cortar mais no "POR GENTILEZA"
-            y_inicio = 0
-            y_fim = pagina.rect.height
-
-            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
-            if y_inicio_list:
-                y_inicio = y_inicio_list[0].y1
-            else:
-                y_inicio = 50
-
-            y_fim_list = pagina.search_for("TOTAL GERAL")
-            if y_fim_list:
-                y_fim = y_fim_list[0].y0
-            else:
-                y_fim = pagina.rect.height
-
-            if y_inicio >= y_fim:
-                y_inicio = 50
-                y_fim = pagina.rect.height
-
-            X_COLUNA_PRODUTO_FIM = 340
-            X_COLUNA_QUANTIDADE_FIM = 450
-
-            palavras_na_tabela = [
-                p for p in pagina.get_text("words")
-                if p[1] > y_inicio and p[3] < y_fim
-            ]
+            palavras_na_tabela = pagina.get_text("words")
             if not palavras_na_tabela:
                 continue
 
@@ -173,9 +147,9 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     valores_parts = []
 
                     for x0, y0, x1, y1, palavra, *_ in chunk:
-                        if x0 < X_COLUNA_PRODUTO_FIM:
+                        if x0 < 340:
                             nome_produto_parts.append(palavra)
-                        elif x0 < X_COLUNA_QUANTIDADE_FIM:
+                        elif x0 < 450:
                             quantidade_parts.append(palavra)
                         else:
                             valores_parts.append(palavra)
@@ -231,7 +205,6 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
     except Exception as e:
         import traceback
         return {"erro": f"Erro na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
-
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
