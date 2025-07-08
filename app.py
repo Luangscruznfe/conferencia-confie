@@ -51,88 +51,185 @@ def init_db():
     conn.close()
 
 
-logger = logging.getLogger("extrator_pdf")
-
-def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
+def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
     try:
-        texto = ""
-        doc = fitz.open(stream=stream, filetype="pdf")
+        documento = fitz.open(stream=stream, filetype="pdf")
+        produtos_finais = []
+        dados_cabecalho = {}
 
-        # Concatena o texto de todas as páginas (opcional, se quiser extrair cliente/vendedor)
-        for page in doc:
-            texto += page.get_text()
+        for i, pagina in enumerate(documento):
+            if i == 0:
+                def extrair_campo_regex(pattern, text):
+                    match = re.search(pattern, text, re.DOTALL)
+                    return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
-        # Extrai número do pedido
-        match_pedido = re.search(r'PEDIDO\s*:? ?(\d{4,10})', texto, re.IGNORECASE)
-        numero_pedido = match_pedido.group(1) if match_pedido else "SEM_NUMERO"
+                texto_completo_pagina = pagina.get_text("text")
 
-        # Extrai nome do cliente
-        match_cliente = re.search(r'CLIENTE\s*:? ?(.+?)\s{2,}', texto, re.IGNORECASE)
-        nome_cliente = match_cliente.group(1).strip() if match_cliente else "Desconhecido"
+                numero_pedido = extrair_campo_regex(r"Pedido:\s*(\d+)", texto_completo_pagina)
+                if numero_pedido == "N/E":
+                    numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
 
-        # Extrai nome do vendedor
-        match_vendedor = re.search(r'VEND(?:EDOR)?\s*:? ?(.+?)\s{2,}', texto, re.IGNORECASE)
-        nome_vendedor = match_vendedor.group(1).strip() if match_vendedor else "Desconhecido"
+                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
 
-        # Extrai produtos com base na nova função visual
-        produtos = extrair_produtos_por_posicao(stream)
+                vendedor = "N/E"
+                try:
+                    vendedor_rect_list = pagina.search_for("Vendedor")
+                    if vendedor_rect_list:
+                        vendedor_rect = vendedor_rect_list[0]
+                        search_area = fitz.Rect(
+                            vendedor_rect.x0 - 15,
+                            vendedor_rect.y1,
+                            vendedor_rect.x1 + 15,
+                            vendedor_rect.y1 + 20
+                        )
+                        vendedor_words = pagina.get_text("words", clip=search_area)
+                        if vendedor_words:
+                            vendedor = vendedor_words[0][4]
+                except Exception:
+                    vendedor = extrair_campo_regex(r"Vendedor\s*([A-ZÀ-Ú]+)", texto_completo_pagina)
 
-        # Monta o dicionário de resposta
+                dados_cabecalho = {
+                    "numero_pedido": numero_pedido,
+                    "nome_cliente": nome_cliente,
+                    "vendedor": vendedor
+                }
+
+            y_inicio = 0
+            y_fim = pagina.rect.height
+
+            y_inicio_list = pagina.search_for("ITEM CÓD. BARRAS")
+            if y_inicio_list:
+                y_inicio = y_inicio_list[0].y1
+            else:
+                y_inicio = 50
+
+            y_fim_list = pagina.search_for("TOTAL GERAL")
+            if y_fim_list:
+                y_fim = y_fim_list[0].y0
+            else:
+                footer_list = pagina.search_for("POR GENTILEZA CONFERIR")
+                if footer_list:
+                    y_fim = footer_list[0].y0 - 5
+
+            if y_inicio >= y_fim and y_fim != pagina.rect.height:
+                continue
+
+            X_COLUNA_PRODUTO_FIM = 340
+            X_COLUNA_QUANTIDADE_FIM = 450
+
+            palavras_na_tabela = [
+                p for p in pagina.get_text("words")
+                if p[1] > y_inicio and p[3] < y_fim
+            ]
+            if not palavras_na_tabela:
+                continue
+
+            palavras_na_tabela.sort(key=lambda p: (p[1], p[0]))
+
+            linhas_agrupadas = []
+            if palavras_na_tabela:
+                linha_atual = [palavras_na_tabela[0]]
+                y_referencia = palavras_na_tabela[0][1]
+                for j in range(1, len(palavras_na_tabela)):
+                    palavra = palavras_na_tabela[j]
+                    if abs(palavra[1] - y_referencia) < 5:
+                        linha_atual.append(palavra)
+                    else:
+                        linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+                        linha_atual = [palavra]
+                        y_referencia = palavra[1]
+                linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
+
+            for palavras_linha in linhas_agrupadas:
+                product_chunks = []
+                current_chunk = []
+                if palavras_linha:
+                    if len(palavras_linha) > 1 and palavras_linha[0][4].isdigit() and len(palavras_linha[0][4]) <= 2:
+                        current_chunk.append(palavras_linha[0])
+                        for k in range(1, len(palavras_linha)):
+                            word_info = palavras_linha[k]
+                            word_text = word_info[4]
+                            is_start_of_new_product = False
+                            if (
+                                word_text.isdigit()
+                                and len(word_text) <= 2
+                                and k + 1 < len(palavras_linha)
+                                and palavras_linha[k + 1][4].isdigit()
+                                and len(palavras_linha[k + 1][4]) > 5
+                            ):
+                                is_start_of_new_product = True
+                            if is_start_of_new_product:
+                                product_chunks.append(current_chunk)
+                                current_chunk = []
+                            current_chunk.append(word_info)
+                        product_chunks.append(current_chunk)
+                    else:
+                        product_chunks.append(palavras_linha)
+
+                for chunk in product_chunks:
+                    nome_produto_parts = []
+                    quantidade_parts = []
+                    valores_parts = []
+
+                    for x0, y0, x1, y1, palavra, *_ in chunk:
+                        if x0 < X_COLUNA_PRODUTO_FIM:
+                            nome_produto_parts.append(palavra)
+                        elif x0 < X_COLUNA_QUANTIDADE_FIM:
+                            quantidade_parts.append(palavra)
+                        else:
+                            valores_parts.append(palavra)
+
+                    if not nome_produto_parts:
+                        continue
+
+                    if (
+                        len(nome_produto_parts) > 1
+                        and nome_produto_parts[0].isdigit()
+                        and (len(nome_produto_parts[0]) <= 2 or nome_produto_parts[1].isdigit())
+                    ):
+                        nome_produto_final = " ".join(nome_produto_parts[2:]) if len(nome_produto_parts) > 2 else " ".join(nome_produto_parts[1:])
+                    else:
+                        nome_produto_final = " ".join(nome_produto_parts)
+
+                    quantidade_completa_str = " ".join(quantidade_parts)
+
+                    valor_total_item = "0.00"
+                    if valores_parts:
+                        match_valor = re.search(r'[\d,.]+', valores_parts[-1])
+                        if match_valor:
+                            valor_total_item = match_valor.group(0)
+
+                    unidades_pacote = 1
+                    match_unidades = re.search(r'C/\s*(\d+)', quantidade_completa_str, re.IGNORECASE)
+                    if match_unidades:
+                        unidades_pacote = int(match_unidades.group(1))
+
+                    if nome_produto_final and quantidade_completa_str:
+                        produtos_finais.append({
+                            "produto_nome": nome_produto_final,
+                            "quantidade_pedida": quantidade_completa_str,
+                            "quantidade_entregue": None,
+                            "status": "Pendente",
+                            "valor_total_item": valor_total_item.replace(',', '.'),
+                            "unidades_pacote": unidades_pacote
+                        })
+
+        documento.close()
+
+        if not produtos_finais:
+            return {"erro": "Nenhum produto pôde ser extraído do PDF."}
+
         return {
-            "numero_pedido": numero_pedido,
-            "nome_cliente": nome_cliente,
-            "vendedor": nome_vendedor,
-            "nome_da_carga": nome_da_carga,
-            "nome_arquivo": nome_arquivo,
+            **dados_cabecalho,
+            "produtos": produtos_finais,
             "status_conferencia": "Pendente",
-            "produtos": produtos
+            "nome_da_carga": nome_da_carga,
+            "nome_arquivo": nome_arquivo
         }
 
     except Exception as e:
         import traceback
-        return {"erro": str(e) + "\n" + traceback.format_exc()}
-
-def extrair_produtos_por_posicao(pdf_bytes):
-    import fitz
-    import re
-
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    produtos = []
-
-    for page in doc:
-        blocks = page.get_text("blocks")
-        linhas = sorted([b for b in blocks if b[4].strip()], key=lambda b: (b[1], b[0]))  # ordena por posição vertical e horizontal
-
-        for linha in linhas:
-            texto = linha[4].strip()
-
-            # Regex baseado na estrutura do PDF com colunas visuais
-            padrao = re.compile(
-                r"(\d{1,3})\s+(\d{13})\s+(\d+)\s+(UN|FD|CJ|DP)\s+R\$?\s*([\d,.]+)\s+R\$?\s*([\d,.]+)\s+(.+)"
-            )
-            match = padrao.match(texto)
-            if match:
-                item = int(match.group(1))
-                codigo_barras = match.group(2)
-                quantidade = int(match.group(3))
-                unidade = match.group(4)
-                valor_unitario = float(match.group(5).replace(".", "").replace(",", "."))
-                valor_total = float(match.group(6).replace(".", "").replace(",", "."))
-                nome_produto = re.sub(r'\s+', ' ', match.group(7)).strip()
-
-                produtos.append({
-                    "item": item,
-                    "codigo_barras": codigo_barras,
-                    "quantidade": quantidade,
-                    "unidade": unidade,
-                    "valor_unitario": valor_unitario,
-                    "valor_total": valor_total,
-                    "nome_produto": nome_produto,
-                    "unidades_pacote": None,
-                    "status": "Pendente"
-                })
-
-    return produtos
+        return {"erro": f"Erro na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
