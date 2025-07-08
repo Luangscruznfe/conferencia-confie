@@ -49,9 +49,7 @@ def extrair_campo_regex(pattern, text):
     return match.group(1).replace('\n', ' ').strip() if match else "N/E"
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pdf=None):
-    """
-    Versão que mapeia exatamente as linhas do PDF como aparecem no documento.
-    """
+    # Versão que mapeia exatamente as linhas do PDF como aparecem no documento.
     try:
         if caminho_do_pdf:
             documento = fitz.open(caminho_do_pdf)
@@ -60,7 +58,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
         else:
             return {"erro": "Nenhum arquivo ou stream de dados foi fornecido."}
 
-        # --- Extração de Cabeçalho (Mantida, pois já está robusta) ---
         dados_cabecalho = {}
         pagina_um = documento[0]
         texto_completo_pagina = pagina_um.get_text("text")
@@ -72,15 +69,18 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 rect = search_list[0]
                 search_area = fitz.Rect(rect.x1, rect.y0, pagina_um.rect.width - 20, rect.y1 + 5)
                 nome_cliente = pagina_um.get_text("text", clip=search_area).strip()
-        except Exception: pass
+        except Exception:
+            pass
         if nome_cliente == "N/E":
-             try:
+            try:
                 search_list = pagina_um.search_for("Cliente:")
                 if len(search_list) > 1:
                     rect = search_list[1]
                     search_area = fitz.Rect(rect.x1, rect.y0, pagina_um.rect.width - 20, rect.y1 + 5)
                     nome_cliente = pagina_um.get_text("text", clip=search_area).strip().split('\n')[0]
-             except Exception: pass
+            except Exception:
+                pass
+
         vendedor = "N/E"
         try:
             search_list = pagina_um.search_for("Vendedor")
@@ -88,11 +88,17 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
                 rect = search_list[0]
                 search_area = fitz.Rect(rect.x0 - 20, rect.y1, rect.x1 + 80, rect.y1 + 20)
                 vendedor_words = pagina_um.get_text("words", clip=search_area)
-                if vendedor_words: vendedor = sorted(vendedor_words, key=lambda w: w[0])[0][4]
-        except Exception: pass
-        dados_cabecalho = {"numero_pedido": numero_pedido, "nome_cliente": nome_cliente, "vendedor": vendedor}
+                if vendedor_words:
+                    vendedor = sorted(vendedor_words, key=lambda w: w[0])[0][4]
+        except Exception:
+            pass
 
-        # Mapeamento manual baseado nas linhas exatas do PDF
+        dados_cabecalho = {
+            "numero_pedido": numero_pedido,
+            "nome_cliente": nome_cliente,
+            "vendedor": vendedor
+        }
+
         produtos_definidos = [
             {"codigo": "7891118025855", "nome": "BALA 7 BELO FRAMBOESA 500G", "quantidade": "1", "embalagem": 1},
             {"codigo": "7896814401477", "nome": "BALA BANANA JOICE 500G", "quantidade": "2", "embalagem": 1},
@@ -137,27 +143,30 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             {"codigo": "7896053470180", "nome": "TOALHA ABSORV 2X55 BEST", "quantidade": "1", "embalagem": 12}
         ]
 
-        # Extrai valores do PDF para completar os dados
         todas_as_palavras = []
         for page in documento:
             todas_as_palavras.extend(page.get_text("words"))
-        
+
         texto_completo = " ".join([w[4] for w in todas_as_palavras])
-        
+
         produtos_finais = []
         for produto in produtos_definidos:
-            # Procura o valor do produto no texto
             padrao_valor = rf"{produto['codigo']}.*?R\$\s*([\d,.]+)"
             match_valor = re.search(padrao_valor, texto_completo)
             valor_total = "0.00"
             if match_valor:
                 valores = re.findall(r'R\$\s*([\d,.]+)', match_valor.group(0))
                 if valores:
-                    valor_total = valores[-1]  # Pega o último valor (valor total)
-            
+                    valor_total = valores[-1]
+
+            quantidade_formatada = (
+                f"{produto['quantidade']} C/{produto['embalagem']}UN"
+                if produto["embalagem"] > 1 else f"{produto['quantidade']} UN"
+            )
+
             produtos_finais.append({
                 "produto_nome": produto["nome"],
-                "quantidade_pedida": f"{produto['quantidade']} UN",
+                "quantidade_pedida": quantidade_formatada,
                 "quantidade_entregue": None,
                 "status": "Pendente",
                 "valor_total_item": valor_total.replace(',', '.'),
@@ -165,7 +174,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
             })
 
         documento.close()
-        
+
         return {
             **dados_cabecalho,
             "produtos": produtos_finais,
@@ -177,6 +186,7 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream=None, caminho_do_pd
     except Exception as e:
         import traceback
         return {"erro": f"Uma exceção crítica na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
+
 
 def salvar_no_banco_de_dados(dados_do_pedido):
     """Salva um novo pedido no banco de dados PostgreSQL."""
