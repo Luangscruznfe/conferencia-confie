@@ -112,9 +112,9 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     y_fim = footer_list[0].y0 - 5
 
             if y_inicio >= y_fim:
-    # Se os marcadores não foram encontrados corretamente, usa a altura padrão da página
-    y_inicio = 50
-    y_fim = pagina.rect.height
+		y_inicio = 50
+    		y_fim = pagina.rect.height
+
 
 
             X_COLUNA_PRODUTO_FIM = 340
