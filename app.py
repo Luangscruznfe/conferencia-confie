@@ -301,7 +301,7 @@ def api_cargas():
 def api_pedidos_por_carga(nome_da_carga):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM pedidos WHERE nome_da_carga = %s;", (nome_da_carga,))
+    cur.execute("SELECT * FROM pedidos WHERE nome_da_carga = %s ORDER BY numero_pedido DESC;", (nome_da_carga,))
     pedidos = cur.fetchall()
     cur.close()
     conn.close()
