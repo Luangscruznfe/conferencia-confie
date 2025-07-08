@@ -51,13 +51,63 @@ def init_db():
     conn.close()
 
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("extrator_pdf")
+
+
 def extrair_campo_regex(padrao, texto):
     resultado = re.search(padrao, texto)
     return resultado.group(1).strip() if resultado else "N/E"
 
-# Configurar logger
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("extrator_pdf")
+
+def extrair_produtos(texto):
+    linhas = texto.split('\n')
+    produtos = []
+    bloco_atual = []
+
+    for linha in linhas:
+        if re.search(r'\d{2}/\d{2}/\d{4}', linha) or re.search(r'Pedido: \d+', linha):
+            continue  # ignora linha de data ou cabeçalho
+
+        if re.search(r'R\$ [\d,.]+', linha):
+            if bloco_atual:
+                produtos.append(' '.join(bloco_atual))
+                bloco_atual = []
+        bloco_atual.append(linha.strip())
+
+    if bloco_atual:
+        produtos.append(' '.join(bloco_atual))
+
+    produtos_extraidos = []
+
+    for p in produtos:
+        match_nome = re.search(r'R\$ [\d,.]+ R\$ [\d,.]+ (.+)', p)
+        match_quant = re.search(r'(\d+)\s+(UN|FD|CJ|DP)\b')
+        match_valor = re.findall(r'R\$ ([\d,.]+)', p)
+
+        if match_nome and match_quant and match_valor:
+            nome = match_nome.group(1).strip()
+            quant = int(match_quant.group(1))
+            unidade = match_quant.group(2)
+            valor_unitario = float(match_valor[-1].replace('.', '').replace(',', '.'))
+
+            match_unidades_finais = re.search(r'\bC/\s*(\d{1,3})\s*UN?\b', nome, re.IGNORECASE)
+            unidades_pacote = None
+            if match_unidades_finais:
+                c_match = match_unidades_finais.group(0)
+                if nome.endswith(c_match):
+                    unidades_pacote = int(match_unidades_finais.group(1))
+
+            produtos_extraidos.append({
+                'nome': nome,
+                'quantidade': quant,
+                'unidade': unidade,
+                'valor_unitario': valor_unitario,
+                'unidades_pacote': unidades_pacote
+            })
+
+    return produtos_extraidos
+
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
     try:
@@ -95,8 +145,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
     except Exception as e:
         logger.exception("Erro ao extrair dados do PDF")
         return {"erro": str(e)}
-
-
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
