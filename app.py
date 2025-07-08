@@ -51,12 +51,13 @@ def init_db():
     conn.close()
 
 
+def extrair_campo_regex(padrao, texto):
+    resultado = re.search(padrao, texto)
+    return resultado.group(1).strip() if resultado else "N/E"
+
+# Configurar logger
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("extrator_pdf")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-    logger.addHandler(ch)
 
 def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
     try:
@@ -67,7 +68,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
                 texto_pdf += page.get_text()
 
         if not texto_pdf.strip():
-            logger.warning("PDF vazio ou ilegível.")
             return {"erro": "O PDF está vazio ou ilegível."}
 
         logger.info(f"Total de palavras extraídas: {len(texto_pdf.split())}")
@@ -75,7 +75,6 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
         produtos = extrair_produtos(texto_pdf)
 
         if not produtos:
-            logger.warning("Nenhum produto extraído do PDF.")
             return {"erro": "Nenhum produto pôde ser extraído do PDF."}
 
         logger.info(f"Total de produtos extraídos: {len(produtos)}")
@@ -93,10 +92,11 @@ def extrair_dados_do_pdf(nome_da_carga, nome_arquivo, stream):
             "produtos": produtos,
             "status_conferencia": "Pendente"
         }
-
     except Exception as e:
         logger.exception("Erro ao extrair dados do PDF")
         return {"erro": str(e)}
+
+
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
@@ -321,3 +321,4 @@ def resetar_dia():
 # =================================================================
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=5000)
+
