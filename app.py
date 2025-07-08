@@ -95,10 +95,17 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     "vendedor": vendedor
                 }
 
-            palavras_na_tabela = [
-                p for p in pagina.get_text("words")
-                if p[1] > 50 and p[3] < pagina.rect.height - 50
-            ]
+            palavras = pagina.get_text("words")
+
+            inicio_tabela = 0
+            fim_tabela = pagina.rect.height
+
+            for bloco in pagina.search_for("ITEM CÓD. BARRAS PRODUTO"):
+                inicio_tabela = bloco.y1
+            for bloco in pagina.search_for("**POR GENTILEZA"):
+                fim_tabela = bloco.y0
+
+            palavras_na_tabela = [p for p in palavras if inicio_tabela <= p[1] <= fim_tabela]
             if not palavras_na_tabela:
                 continue
 
@@ -119,36 +126,7 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                 linhas_agrupadas.append(sorted(linha_atual, key=lambda p: p[0]))
 
             for palavras_linha in linhas_agrupadas:
-                if any(
-                    termo in palavras_linha[0][4].upper()
-                    for termo in ["RUA", "CLIENTE", "CNPJ", "CIDADE", "CONTATO", "FORMA", "TIPO"]
-                ):
-                    continue
-
-                product_chunks = []
-                current_chunk = []
-                if palavras_linha:
-                    if len(palavras_linha) > 1 and palavras_linha[0][4].isdigit() and len(palavras_linha[0][4]) <= 2:
-                        current_chunk.append(palavras_linha[0])
-                        for k in range(1, len(palavras_linha)):
-                            word_info = palavras_linha[k]
-                            word_text = word_info[4]
-                            is_start_of_new_product = False
-                            if (
-                                word_text.isdigit()
-                                and len(word_text) <= 2
-                                and k + 1 < len(palavras_linha)
-                                and palavras_linha[k + 1][4].isdigit()
-                                and len(palavras_linha[k + 1][4]) > 5
-                            ):
-                                is_start_of_new_product = True
-                            if is_start_of_new_product:
-                                product_chunks.append(current_chunk)
-                                current_chunk = []
-                            current_chunk.append(word_info)
-                        product_chunks.append(current_chunk)
-                    else:
-                        product_chunks.append(palavras_linha)
+                product_chunks = [palavras_linha]
 
                 for chunk in product_chunks:
                     nome_produto_parts = []
@@ -166,15 +144,7 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                     if not nome_produto_parts:
                         continue
 
-                    if (
-                        len(nome_produto_parts) > 2
-                        and nome_produto_parts[0].isdigit()
-                        and len(nome_produto_parts[0]) <= 2
-                    ):
-                        nome_produto_final = " ".join(nome_produto_parts[1:])
-                    else:
-                        nome_produto_final = " ".join(nome_produto_parts)
-
+                    nome_produto_final = " ".join(nome_produto_parts)
                     quantidade_completa_str = " ".join(quantidade_parts)
 
                     valor_total_item = "0.00"
@@ -214,7 +184,6 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
     except Exception as e:
         import traceback
         return {"erro": f"Erro na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
-
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
