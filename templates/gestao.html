@@ -224,4 +224,60 @@ function carregarCortes() {
         cargaDiv.className = 'mb-5';
         let tabelaHtml = `<h3 class="mb-3">Cortes da: <span class="text-primary">${nomeCarga}</span></h3><div class="table-responsive"><table class="table table-striped table-hover"><thead><tr><th>Nº Pedido</th><th>Cliente</th><th>Vendedor</th><th>Produto Cortado</th><th>Qtd. Pedida</th><th>Qtd. Entregue</th><th>Status</th><th>Observação</th></tr></thead><tbody>`;
         cargas[nomeCarga].forEach(item => {
-          tabelaHtml += `<tr><td>${item.numero_pedido}</td><td>${item.nome_cliente}</td><td>${item.vendedor}</td><td>${item.produto.produto_nome || ''}</td><td>${item.produto.quantidade_pedida}</td><td>${item.produt
+          tabelaHtml += `<tr><td>${item.numero_pedido}</td><td>${item.nome_cliente}</td><td>${item.vendedor}</td><td>${item.produto.produto_nome || ''}</td><td>${item.produto.quantidade_pedida}</td><td>${item.produto.quantidade_entregue}</td><td><span class="badge bg-danger">${item.produto.status}</span></td><td>${item.observacao || ''}</td></tr>`;
+        });
+        tabelaHtml += `</tbody></table></div>`;
+        cargaDiv.innerHTML = tabelaHtml;
+        container.appendChild(cargaDiv);
+      });
+    });
+}
+
+function carregarBackups() {
+  const lista = document.getElementById('backup-lista');
+  fetch('/api/backups-listar')
+    .then(response => response.json())
+    .then(backups => {
+      lista.innerHTML = '';
+      if (backups.length === 0) {
+        lista.innerHTML = '<li><a class="dropdown-item text-muted" href="#">Nenhum backup encontrado.</a></li>';
+        return;
+      }
+      backups.forEach(backup => {
+        const item = document.createElement('li');
+        item.innerHTML = `<a class="dropdown-item" href="#" onclick="restaurarBackup('${backup}')">${backup}</a>`;
+        lista.appendChild(item);
+      });
+    });
+}
+
+function restaurarBackup(nomeBackup) {
+  if (confirm(`Tem a certeza que quer restaurar o backup '${nomeBackup}'? Todos os dados atuais serão substituídos.`)) {
+    fetch(`/api/restaurar-backup/${nomeBackup}`, { method: 'POST' })
+      .then(response => response.json())
+      .then(data => {
+        alert(data.mensagem || data.erro);
+        if (data.sucesso) { window.location.reload(); }
+      });
+  }
+}
+
+function resetarDia() {
+  if (confirm('Tem a certeza que deseja limpar todos os dados do dia? Esta ação não pode ser desfeita.')) {
+    fetch('/api/resetar-dia', { method: 'POST' })
+      .then(response => response.json())
+      .then(data => {
+        if (data.sucesso) { alert(data.mensagem); window.location.reload(); } 
+        else { alert('Erro ao limpar os dados: ' + data.erro); }
+      });
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  carregarCortes();
+  carregarBackups();
+});
+</script>
+
+</body>
+</html>
