@@ -8,6 +8,8 @@ import json, os, re, io, fitz, shutil, requests
 from werkzeug.utils import secure_filename
 from collections import defaultdict
 from datetime import datetime
+from zipfile import ZipFile
+import io
 import pandas as pd
 import fitz
 import re
@@ -434,6 +436,43 @@ def resetar_dia():
         return jsonify({"sucesso": False, "erro": str(e)}), 500
     finally:
         if conn: cur.close(); conn.close()
+
+@app.route('/api/upload-zip/<nome_da_carga>', methods=['POST'])
+def upload_zip(nome_da_carga):
+    if 'file' not in request.files:
+        return jsonify({"erro": "Nenhum arquivo ZIP enviado."}), 400
+
+    zip_file = request.files['file']
+    if not zip_file.filename.endswith('.zip'):
+        return jsonify({"erro": "Formato inválido. Envie um arquivo .zip."}), 400
+
+    try:
+        with ZipFile(zip_file) as zip_ref:
+            arquivos_pdf = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
+            if not arquivos_pdf:
+                return jsonify({"erro": "Nenhum PDF encontrado dentro do ZIP."}), 400
+
+            sucessos, erros = 0, []
+
+            for nome_pdf in arquivos_pdf:
+                with zip_ref.open(nome_pdf) as pdf_file:
+                    pdf_bytes = pdf_file.read()
+                    dados = extrair_dados_do_pdf(stream=pdf_bytes, nome_da_carga=nome_da_carga, nome_arquivo=nome_pdf)
+                    if "erro" in dados:
+                        erros.append(f"{nome_pdf}: {dados['erro']}")
+                        continue
+                    upload_result = cloudinary.uploader.upload(pdf_bytes, resource_type="raw", public_id=f"pedidos/{nome_pdf}")
+                    dados['url_pdf'] = upload_result['secure_url']
+                    salvar_no_banco_de_dados(dados)
+                    sucessos += 1
+
+            if erros:
+                return jsonify({"sucesso": False, "mensagem": f"{sucessos} PDF(s) processado(s).", "erros": erros})
+
+            return jsonify({"sucesso": True, "mensagem": f"{sucessos} PDF(s) processado(s) com sucesso."})
+    except Exception as e:
+        import traceback
+        return jsonify({"erro": f"Erro ao processar ZIP: {str(e)}\n{traceback.format_exc()}"}), 500
 
 # =================================================================
 # 5. RODA O APP
