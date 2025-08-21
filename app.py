@@ -16,8 +16,6 @@ import re
 import sys
 import logging
 
-
-
 # =================================================================
 # 2. CONFIGURAÇÃO DA APP FLASK
 # =================================================================
@@ -74,7 +72,7 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                 if numero_pedido == "N/E":
                     numero_pedido = extrair_campo_regex(r"Pedido\s+(\d+)", texto_completo_pagina)
 
-                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\\. Pgto:|\n)", texto_completo_pagina)
+                nome_cliente = extrair_campo_regex(r"Cliente:\s*(.*?)(?:\s*Cond\. Pgto:|\n)", texto_completo_pagina)
 
                 vendedor = "N/E"
                 try:
@@ -198,7 +196,8 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
                             "quantidade_entregue": None,
                             "status": "Pendente",
                             "valor_total_item": valor_total_item.replace(',', '.'),
-                            "unidades_pacote": unidades_pacote
+                            "unidades_pacote": unidades_pacote,
+                            "forced_confirmed": False  # NOVO: começa falso
                         })
 
         documento.close()
@@ -217,7 +216,6 @@ def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
     except Exception as e:
         import traceback
         return {"erro": f"Erro na extração do PDF: {str(e)}\n{traceback.format_exc()}"}
-
 
 
 def salvar_no_banco_de_dados(dados_do_pedido):
@@ -267,11 +265,13 @@ def detalhe_pedido(pedido_id):
 
 @app.route('/api/upload/<nome_da_carga>', methods=['POST'])
 def upload_files(nome_da_carga):
-    if 'files[]' not in request.files: return jsonify({"sucesso": False, "erro": "Nenhum arquivo enviado."}), 400
+    if 'files[]' not in request.files: 
+        return jsonify({"sucesso": False, "erro": "Nenhum arquivo enviado."}), 400
     files = request.files.getlist('files[]')
     erros, sucessos = [], 0
     for file in files:
-        if file.filename == '': continue
+        if file.filename == '': 
+            continue
         filename = secure_filename(file.filename)
         try:
             pdf_bytes = file.read()
@@ -286,7 +286,8 @@ def upload_files(nome_da_carga):
         except Exception as e:
             import traceback
             erros.append(f"Arquivo '{filename}': Falha inesperada no processamento. {traceback.format_exc()}")
-    if erros: return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
+    if erros: 
+        return jsonify({"sucesso": False, "erro": f"{sucessos} arquivo(s) processado(s). ERROS: {'; '.join(erros)}"})
     return jsonify({"sucesso": True, "mensagem": f"Todos os {sucessos} arquivo(s) da carga '{nome_da_carga}' foram processados."})
 
 @app.route('/api/cargas')
@@ -309,6 +310,7 @@ def api_pedidos_por_carga(nome_da_carga):
     conn.close()
     return jsonify(pedidos)
 
+# =====================  (ALTERADO)  =====================
 @app.route('/api/item/update', methods=['POST'])
 def update_item_status():
     dados_recebidos = request.json
@@ -319,31 +321,50 @@ def update_item_status():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM pedidos WHERE numero_pedido = %s;", (dados_recebidos['pedido_id'],))
         pedido = cur.fetchone()
-        if not pedido: return jsonify({"sucesso": False, "erro": "Pedido não encontrado."}), 404
+        if not pedido: 
+            return jsonify({"sucesso": False, "erro": "Pedido não encontrado."}), 404
+
         produtos_atualizados = pedido['produtos']
         todos_conferidos = True
+
         for produto in produtos_atualizados:
             if produto['produto_nome'] == dados_recebidos['produto_nome']:
                 qtd_entregue_str = dados_recebidos['quantidade_entregue']
                 produto['quantidade_entregue'] = qtd_entregue_str
                 produto['observacao'] = dados_recebidos.get('observacao', '')
+
+                # >>> NOVO: se estiver forçado, sempre fica Confirmado e não recalcula
+                if bool(produto.get('forced_confirmed', False)):
+                    status_final = "Confirmado"
+                    produto['status'] = status_final
+                    break
+
+                # cálculo normal
                 qtd_pedida_str = produto.get('quantidade_pedida', '0')
                 unidades_pacote = int(produto.get('unidades_pacote', 1))
                 match_pacotes = re.match(r'(\d+)', qtd_pedida_str)
                 pacotes_pedidos = int(match_pacotes.group(1)) if match_pacotes else 0
                 total_unidades_pedidas = pacotes_pedidos * unidades_pacote
+
                 try:
                     qtd_entregue_int = int(qtd_entregue_str)
-                    if qtd_entregue_int == total_unidades_pedidas: status_final = "Confirmado"
-                    elif qtd_entregue_int == 0: status_final = "Corte Total"
-                    else: status_final = "Corte Parcial"
-                except (ValueError, TypeError): status_final = "Corte Parcial"
+                    if qtd_entregue_int == total_unidades_pedidas: 
+                        status_final = "Confirmado"
+                    elif qtd_entregue_int == 0: 
+                        status_final = "Corte Total"
+                    else: 
+                        status_final = "Corte Parcial"
+                except (ValueError, TypeError): 
+                    status_final = "Corte Parcial"
+
                 produto['status'] = status_final
                 break
+
         for produto in produtos_atualizados:
             if produto['status'] == 'Pendente':
                 todos_conferidos = False
                 break
+
         novo_status_conferencia = 'Finalizado' if todos_conferidos else 'Pendente'
         sql_update = "UPDATE pedidos SET produtos = %s, status_conferencia = %s WHERE numero_pedido = %s;"
         cur.execute(sql_update, (json.dumps(produtos_atualizados), novo_status_conferencia, dados_recebidos['pedido_id']))
@@ -353,10 +374,59 @@ def update_item_status():
         import traceback; traceback.print_exc()
         return jsonify({"sucesso": False, "erro": str(e)}), 500
     finally:
-        if conn: cur.close(); conn.close()
+        if conn: 
+            cur.close(); 
+            conn.close()
+
+# =====================  (NOVO)  =====================
+@app.route('/api/item/force', methods=['POST'])
+def force_item():
+    """
+    Alterna o 'forced_confirmed' do produto.
+    Quando forçado: status = 'Confirmado'.
+    Ao desfazer: status = 'Pendente' (o conferente decide depois).
+    """
+    dados = request.json
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM pedidos WHERE numero_pedido = %s;", (dados['pedido_id'],))
+        pedido = cur.fetchone()
+        if not pedido:
+            return jsonify({"sucesso": False, "erro": "Pedido não encontrado."}), 404
+
+        produtos = pedido['produtos']
+        novo_forced = None
+        novo_status = None
+
+        for produto in produtos:
+            if produto.get('produto_nome') == dados.get('produto_nome'):
+                atual = bool(produto.get('forced_confirmed', False))
+                produto['forced_confirmed'] = not atual
+                novo_forced = produto['forced_confirmed']
+                if produto['forced_confirmed']:
+                    produto['status'] = 'Confirmado'
+                else:
+                    # opcional: você pode recalcular aqui se quiser
+                    produto['status'] = 'Pendente'
+                novo_status = produto['status']
+                break
+
+        cur.execute("UPDATE pedidos SET produtos = %s WHERE numero_pedido = %s;",
+                    (json.dumps(produtos), dados['pedido_id']))
+        conn.commit()
+        return jsonify({"sucesso": True, "forced_confirmed": novo_forced, "status": novo_status})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
+    finally:
+        if conn:
+            cur.close(); conn.close()
 
 @app.route('/api/cortes')
 def api_cortes():
+    # só inclui Corte Parcial/Total (itens confirmados — inclusive forçados — ficam de fora) :contentReference[oaicite:1]{index=1}
     cortes_agrupados = defaultdict(list)
     conn = None
     try:
@@ -366,32 +436,43 @@ def api_cortes():
         pedidos = cur.fetchall()
         for pedido in pedidos:
             produtos = pedido.get('produtos', []) if pedido.get('produtos') is not None else []
-            if not isinstance(produtos, list): continue
+            if not isinstance(produtos, list): 
+                continue
             nome_carga = pedido.get('nome_da_carga', 'Sem Carga')
             for produto in produtos:
                 if produto.get('status') in ['Corte Parcial', 'Corte Total']:
-                    item_corte = {"numero_pedido": pedido.get('numero_pedido'), "nome_cliente": pedido.get('nome_cliente'), "vendedor": pedido.get('vendedor'), "observacao": produto.get('observacao', ''), "produto": produto}
-                    cortes_agrupados[nome_carga].append(item_corte)
+                    cortes_agrupados[nome_carga].append({
+                        "numero_pedido": pedido.get('numero_pedido'),
+                        "nome_cliente": pedido.get('nome_cliente'),
+                        "vendedor": pedido.get('vendedor'),
+                        "observacao": produto.get('observacao', ''),
+                        "produto": produto
+                    })
         return jsonify(cortes_agrupados)
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
     finally:
-        if conn: cur.close(); conn.close()
-        
+        if conn: 
+            cur.close(); conn.close()
+
 @app.route('/api/gerar-relatorio')
 def gerar_relatorio():
+    # idem: só considera Corte Parcial/Total (confirmados/forçados não entram) :contentReference[oaicite:2]{index=2}
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM pedidos;")
         pedidos = cur.fetchall()
-        if not pedidos: return "Nenhum pedido encontrado para gerar o relatório.", 404
+        if not pedidos: 
+            return "Nenhum pedido encontrado para gerar o relatório.", 404
+
         dados_para_excel = []
         for pedido in pedidos:
             produtos = pedido.get('produtos', []) if pedido.get('produtos') is not None else []
-            if not isinstance(produtos, list): continue
+            if not isinstance(produtos, list): 
+                continue
             for produto in produtos:
                 if produto.get('status') in ['Corte Parcial', 'Corte Total']:
                     try:
@@ -406,21 +487,41 @@ def gerar_relatorio():
                         qtd_entregue_str = str(produto.get('quantidade_entregue', '0'))
                         unidades_entregues = int(qtd_entregue_str) if qtd_entregue_str.isdigit() else 0
                         valor_corte = (unidades_pedidas - unidades_entregues) * preco_unidade
-                        dados_para_excel.append({'Pedido': pedido.get('numero_pedido'), 'Cliente': pedido.get('nome_cliente'), 'Vendedor': pedido.get('vendedor'), 'Produto': produto.get('produto_nome', ''), 'Quantidade Pedida': produto.get('quantidade_pedida', ''), 'Quantidade Entregue': produto.get('quantidade_entregue', ''), 'Status': produto.get('status', ''), 'Observação': produto.get('observacao', ''), 'Valor Total Item': produto.get('valor_total_item'), 'Valor do Corte Estimado': round(valor_corte, 2)})
+
+                        dados_para_excel.append({
+                            'Pedido': pedido.get('numero_pedido'),
+                            'Cliente': pedido.get('nome_cliente'),
+                            'Vendedor': pedido.get('vendedor'),
+                            'Produto': produto.get('produto_nome', ''),
+                            'Quantidade Pedida': produto.get('quantidade_pedida', ''),
+                            'Quantidade Entregue': produto.get('quantidade_entregue', ''),
+                            'Status': produto.get('status', ''),
+                            'Observação': produto.get('observacao', ''),
+                            'Valor Total Item': produto.get('valor_total_item'),
+                            'Valor do Corte Estimado': round(valor_corte, 2)
+                        })
                     except (ValueError, TypeError, AttributeError) as e:
                         print(f"Erro ao calcular corte para o produto {produto.get('produto_nome', 'N/A')}: {e}")
                         continue
-        if not dados_para_excel: return "Nenhum item com corte encontrado para gerar o relatório."
+
+        if not dados_para_excel: 
+            return "Nenhum item com corte encontrado para gerar o relatório."
+
         df = pd.DataFrame(dados_para_excel)
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Cortes')
-        return Response(output.getvalue(), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment;filename=cortes_relatorio.xlsx"})
+        return Response(
+            output.getvalue(),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment;filename=cortes_relatorio.xlsx"}
+        )
     except Exception as e:
         import traceback; traceback.print_exc()
         return f"Erro ao gerar relatório: {e}", 500
     finally:
-        if conn: cur.close(); conn.close()
+        if conn: 
+            cur.close(); conn.close()
 
 @app.route('/api/resetar-dia', methods=['POST'])
 def resetar_dia():
@@ -435,48 +536,5 @@ def resetar_dia():
         import traceback; traceback.print_exc()
         return jsonify({"sucesso": False, "erro": str(e)}), 500
     finally:
-        if conn: cur.close(); conn.close()
-
-@app.route('/api/upload-zip/<nome_da_carga>', methods=['POST'])
-def upload_zip(nome_da_carga):
-    if 'file' not in request.files:
-        return jsonify({"erro": "Nenhum arquivo ZIP enviado."}), 400
-
-    zip_file = request.files['file']
-    if not zip_file.filename.endswith('.zip'):
-        return jsonify({"erro": "Formato inválido. Envie um arquivo .zip."}), 400
-
-    try:
-        with ZipFile(zip_file) as zip_ref:
-            arquivos_pdf = [f for f in zip_ref.namelist() if f.lower().endswith('.pdf')]
-            if not arquivos_pdf:
-                return jsonify({"erro": "Nenhum PDF encontrado dentro do ZIP."}), 400
-
-            sucessos, erros = 0, []
-
-            for nome_pdf in arquivos_pdf:
-                with zip_ref.open(nome_pdf) as pdf_file:
-                    pdf_bytes = pdf_file.read()
-                    dados = extrair_dados_do_pdf(stream=pdf_bytes, nome_da_carga=nome_da_carga, nome_arquivo=nome_pdf)
-                    if "erro" in dados:
-                        erros.append(f"{nome_pdf}: {dados['erro']}")
-                        continue
-                    upload_result = cloudinary.uploader.upload(pdf_bytes, resource_type="raw", public_id=f"pedidos/{nome_pdf}")
-                    dados['url_pdf'] = upload_result['secure_url']
-                    salvar_no_banco_de_dados(dados)
-                    sucessos += 1
-
-            if erros:
-                return jsonify({"sucesso": False, "mensagem": f"{sucessos} PDF(s) processado(s).", "erros": erros})
-
-            return jsonify({"sucesso": True, "mensagem": f"{sucessos} PDF(s) processado(s) com sucesso."})
-    except Exception as e:
-        import traceback
-        return jsonify({"erro": f"Erro ao processar ZIP: {str(e)}\n{traceback.format_exc()}"}), 500
-
-# =================================================================
-# 5. RODA O APP
-# =================================================================
-if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)
-
+        if conn: 
+            cur.close(); conn.close()

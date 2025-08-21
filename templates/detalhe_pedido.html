@@ -211,6 +211,7 @@
             <div class="ms-3">
                 <div class="d-grid gap-2">
                     <button class="btn btn-sm btn-success" onclick="confirmarItem({{ loop.index0 }})">Confirmado</button>
+                    <button class="btn btn-sm btn-warning" onclick="forcarItem({{ loop.index0 }})">Forçar conferência</button>
                     <button class="btn btn-sm btn-danger" onclick="abrirModalCorte({{ loop.index0 }})">Cortar / Editar</button>
                 </div>
             </div>
@@ -309,7 +310,7 @@ function atualizarDOMDoItem(index) {
             qtdEntregueP.classList.add('qtd-entregue');
             divInfo.appendChild(qtdEntregueP);
         }
-        qtdEntregueP.innerHTML = `<strong>Qtd. Entregue:</strong> ${produto.quantidade_entregue}`;
+        qtdEntregueP.innerHTML = `<strong>Qtd. Entregue:</strong> ${produto.quantidade_entregue ?? ''}`;
 
         if (!statusP) {
             statusP = document.createElement('p');
@@ -318,7 +319,7 @@ function atualizarDOMDoItem(index) {
         }
         statusP.innerHTML = `<strong>Status:</strong> <span class="fw-bold">${produto.status}</span>`;
 
-        if (produto.observacao && produto.observacao.trim() !== '') {
+        if (produto.observacao && String(produto.observacao).trim() !== '') {
             if (!observacaoP) {
                 observacaoP = document.createElement('p');
                 observacaoP.classList.add('observacao-produto');
@@ -344,12 +345,45 @@ function confirmarItem(index) {
     atualizarItem(index, totalUnidades.toString());
 }
 
+// ---------- NOVO: Forçar Conferência ----------
+function forcarItem(index) {
+    const produto = pedidoData.produtos[index];
+
+    fetch('/api/item/force', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            pedido_id: "{{ pedido.numero_pedido }}",
+            produto_nome: produto.produto_nome
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.sucesso) { 
+            alert('Erro: ' + (data.erro || 'Falha ao forçar.')); 
+            return; 
+        }
+
+        // Atualiza dados locais
+        produto.forced_confirmed = data.forced_confirmed;
+        produto.status = data.status; // "Confirmado" quando forçado
+
+        // Se quiser, podemos zerar a quantidade entregue visualmente quando forçado
+        if (produto.forced_confirmed && !produto.quantidade_entregue) {
+            produto.quantidade_entregue = '';
+        }
+
+        // Fica verde igual ao Confirmado normal
+        atualizarDOMDoItem(index);
+    })
+    .catch(() => alert('Falha de rede ao forçar a conferência.'));
+}
+
 function abrirModalCorte(index) {
     const produto = pedidoData.produtos[index];
 
     document.getElementById('modal-produto-nome').textContent = produto.produto_nome || "[Nome do Produto em Falta]";
     document.getElementById('modal-item-index').value = index;
-    
     document.getElementById('modal-qtd-entregue').value = produto.quantidade_entregue || '';
     document.getElementById('modal-observacao').value = produto.observacao || '';
 
@@ -357,21 +391,13 @@ function abrirModalCorte(index) {
 }
 
 function salvarCorte() {
-    const index = document.getElementById('modal-item-index').value;
-    const quantidadeEntregueInput = document.getElementById('modal-qtd-entregue');
-    const quantidadeEntregue = quantidadeEntregueInput.value;
-    const observacao = document.getElementById('modal-observacao').value;
+    const index = parseInt(document.getElementById('modal-item-index').value, 10);
+    const qtdEnt = document.getElementById('modal-qtd-entregue').value;
+    const obs = document.getElementById('modal-observacao').value;
 
-    if (quantidadeEntregue === "" || isNaN(quantidadeEntregue) || parseInt(quantidadeEntregue) < 0) {
-        alert('Por favor, insira uma quantidade entregue válida.');
-        quantidadeEntregueInput.focus();
-        return;
-    }
-
-    atualizarItem(index, quantidadeEntregue, observacao);
+    atualizarItem(index, qtdEnt, obs);
     corteModal.hide();
 }
 </script>
-
 </body>
 </html>
