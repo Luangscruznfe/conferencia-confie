@@ -96,12 +96,10 @@
     </button>
     <div class="collapse navbar-collapse" id="navbarNav">
       <ul class="navbar-nav">
-        <li class="nav-item">
-          <a class="nav-link" href="/conferencia">Conferência</a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link active" href="/gestao">Gestão</a>
-        </li>
+        <li class="nav-item"><a class="nav-link" href="/conferencia">Conferência</a></li>
+        <li class="nav-item"><a class="nav-link active" href="/gestao">Gestão</a></li>
+        <!-- NOVO: link para a aba Mapas -->
+        <li class="nav-item"><a class="nav-link" href="/mapa">Mapas</a></li>
       </ul>
     </div>
   </div>
@@ -123,6 +121,49 @@
       </div>
     </div>
   </div>
+
+<!-- ==== NOVO CARD: Importar Mapa de Separação (PDF) ==== -->
+<div class="card mb-4 shadow-sm">
+  <div class="card-header">Importar Mapa de Separação (PDF)</div>
+  <div class="card-body">
+    <form id="form-mapa" class="d-flex gap-2" enctype="multipart/form-data" onsubmit="return false;">
+      <input class="form-control" type="file" name="pdf" accept="application/pdf" required />
+      <button id="btn-enviar-mapa" class="btn btn-warning">Enviar Mapa</button>
+      <a href="/mapa" class="btn btn-outline-light">Abrir Mapas</a>
+    </form>
+    <div id="resultado-mapa" class="mt-3 small text-muted"></div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const btnMapa = document.getElementById('btn-enviar-mapa');
+  if (!btnMapa) return;
+
+  btnMapa.addEventListener('click', async () => {
+    const form = document.getElementById('form-mapa');
+    const fd = new FormData(form);
+    const out = document.getElementById('resultado-mapa');
+    out.textContent = 'Processando mapa...';
+
+    try {
+      const resp = await fetch('/mapa/upload', { method: 'POST', body: fd });
+      const text = await resp.text();
+      try {
+        const data = JSON.parse(text);
+        if (data.ok) {
+          out.innerHTML = `✅ Importado — <b>Carga:</b> ${data.numero_carga} | <b>Grupos:</b> ${data.grupos} | <b>Itens:</b> ${data.itens}
+                           <br><a class="link-info" href="/mapa">Abrir Mapas</a>`;
+        } else {
+          out.innerHTML = '⚠️ ' + text;
+        }
+      } catch { out.innerHTML = text; }
+    } catch(e) {
+      out.textContent = 'Erro ao enviar: ' + e.message;
+    }
+  });
+});
+</script>
 
   <div class="d-flex justify-content-start gap-2 mb-4">
     <a href="/api/gerar-relatorio" class="btn btn-success">Gerar Relatório Excel</a>

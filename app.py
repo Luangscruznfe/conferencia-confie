@@ -677,3 +677,328 @@ def mapa_upload():
         "itens": len(itens)
     })
 
+@app.route('/api/mapas')
+def api_mapas():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT numero_carga, motorista, data_emissao, criado_em
+        FROM cargas
+        ORDER BY criado_em DESC
+    """)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify([
+        {"numero_carga": r[0], "motorista": r[1], "data_emissao": r[2],
+         "criado_em": r[3].isoformat() if r[3] else None}
+    for r in rows])
+
+@app.route('/mapa')
+def mapa_lista():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT numero_carga, motorista, data_emissao
+        FROM cargas
+        ORDER BY criado_em DESC
+    """)
+    mapas = cur.fetchall()
+    cur.close(); conn.close()
+
+    html = ['''<!DOCTYPE html><html lang="pt-br"><head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapas</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    </head><body class="bg-dark text-light"><div class="container mt-4">
+    <nav class="mb-3">
+      <a class="btn btn-outline-light me-2" href="/conferencia">Conferência</a>
+      <a class="btn btn-outline-light me-2" href="/gestao">Gestão</a>
+      <a class="btn btn-warning" href="/mapa/upload">Importar novo mapa</a>
+    </nav>
+    <h2 class="mb-3">🗺️ Mapas de Separação</h2>
+    <p class="text-secondary">Escolha um mapa para iniciar a separação.</p>
+    <div class="list-group">''']
+    if mapas:
+        for num, mot, data in mapas:
+            html.append(f'''
+              <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center bg-dark text-light"
+                 href="/mapa/{num}">
+                <div>
+                  <div class="fw-bold">{num}</div>
+                  <small class="text-secondary">Motorista: {mot or '-'} | Emissão: {data or '-'}</small>
+                </div>
+                <span class="bi bi-chevron-right"></span>
+              </a>''')
+    else:
+        html.append('''<div class="alert alert-secondary">Nenhum mapa importado ainda.
+        Use a aba <b>Gestão</b> para subir um PDF.</div>''')
+    html.append('</div></div></body></html>')
+    return ''.join(html)
+
+# ========== MAPA: APIs de listagem e atualização (NOVO) ==========
+
+@app.route('/api/mapa/<numero_carga>')
+def api_mapa_detalhe(numero_carga):
+    """Retorna grupos e itens da carga, para montar a tela de separação."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # grupos
+    cur.execute("""
+        SELECT grupo_codigo, grupo_titulo
+        FROM carga_grupos
+        WHERE numero_carga = %s
+        ORDER BY grupo_codigo;
+    """, (numero_carga,))
+    grupos = cur.fetchall()
+
+    # itens
+    cur.execute("""
+        SELECT id, grupo_codigo, fabricante, codigo, cod_barras, descricao,
+               qtd_unidades, unidade, pack_qtd, pack_unid,
+               observacao, separado, forcar_conferido, faltou, sobrando
+        FROM carga_itens
+        WHERE numero_carga = %s
+        ORDER BY grupo_codigo, descricao;
+    """, (numero_carga,))
+    itens = cur.fetchall()
+
+    cur.close(); conn.close()
+    return jsonify({"grupos": grupos, "itens": itens})
+
+
+@app.route('/api/mapa/item/atualizar', methods=['POST'])
+def api_mapa_item_atualizar():
+    """Atualiza flags do item (separado, faltou, forçado), observação e sobrando."""
+    data = request.json or {}
+    item_id = data.get('item_id')
+    if not item_id:
+        return jsonify({"ok": False, "erro": "item_id é obrigatório"}), 400
+
+    campos = {
+        "separado": bool(data.get('separado', False)),
+        "faltou": bool(data.get('faltou', False)),
+        "forcar_conferido": bool(data.get('forcar_conferido', False)),
+        "observacao": data.get('observacao', '') or '',
+        "sobrando": int(data.get('sobrando') or 0)
+    }
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE carga_itens
+           SET separado=%s, faltou=%s, forcar_conferido=%s,
+               observacao=%s, sobrando=%s
+         WHERE id=%s
+    """, (campos["separado"], campos["faltou"], campos["forcar_conferido"],
+          campos["observacao"], campos["sobrando"], item_id))
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route('/api/mapa/grupo/marcar', methods=['POST'])
+def api_mapa_grupo_marcar():
+    """Marca/Desmarca um grupo inteiro como 'separado' (checkbox em massa)."""
+    data = request.json or {}
+    numero_carga = data.get('numero_carga')
+    grupo_codigo = data.get('grupo_codigo')
+    separado = bool(data.get('separado', True))
+    if not numero_carga or not grupo_codigo:
+        return jsonify({"ok": False, "erro": "numero_carga e grupo_codigo obrigatórios"}), 400
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE carga_itens
+           SET separado=%s
+         WHERE numero_carga=%s AND grupo_codigo=%s
+    """, (separado, numero_carga, grupo_codigo))
+    afetados = cur.rowcount
+    conn.commit()
+    cur.close(); conn.close()
+    return jsonify({"ok": True, "itens_afetados": afetados})
+
+@app.route('/mapa/<numero_carga>')
+def mapa_detalhe(numero_carga):
+    """Tela de separação por grupos/itens, com checkboxes e ações."""
+    # HTML simples, carrega dados via /api/mapa/<numero_carga> e monta a UI no front
+    html = f"""
+    <!DOCTYPE html><html lang="pt-br"><head>
+      <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Mapa {numero_carga}</title>
+      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+      <style>
+        body {{ background:#0f1115; color:#e8e8e8; }}
+        .card {{ background:#161a22; border-color:#263043; }}
+        .tag {{ font-size:.75rem; opacity:.8; }}
+        .item-row.separado {{ background:rgba(40,167,69,.12); }}
+        .item-row.faltou {{ background:rgba(220,53,69,.12); }}
+        .item-row.forcado {{ outline:1px dashed #ffc107; }}
+        .sticky-top-bar {{ position:sticky; top:0; z-index:1020; background:#0f1115; padding:.75rem 0; }}
+        .search-input::placeholder {{ color:#9aa3b2; }}
+        .hover-row:hover {{ background:#1b2130; }}
+        .small-mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }}
+      </style>
+    </head><body>
+      <div class="container py-3">
+        <nav class="mb-3">
+          <a class="btn btn-outline-light me-2" href="/mapa">← Mapas</a>
+          <a class="btn btn-outline-light me-2" href="/gestao">Gestão</a>
+          <a class="btn btn-outline-light" href="/conferencia">Conferência</a>
+        </nav>
+
+        <div class="sticky-top-bar">
+          <h3 class="mb-2">Mapa <span class="text-info">{numero_carga}</span></h3>
+          <div class="row g-2">
+            <div class="col-md-6">
+              <input id="busca" class="form-control search-input" placeholder="Buscar por código, EAN ou descrição..." />
+            </div>
+            <div class="col-md-6 text-md-end">
+              <span id="resumo" class="text-secondary"></span>
+            </div>
+          </div>
+        </div>
+
+        <div id="grupos" class="mt-3"></div>
+      </div>
+
+      <script>
+      const NUMERO_CARGA = {json.dumps(numero_carga)};
+      let STATE = {{ grupos: [], itens: [] }};
+
+      function badge(txt, cls) {{
+        return `<span class="badge ${'{'}cls{'}'} ms-1 tag">${'{'}txt{'}'}</span>`;
+      }}
+
+      function pintaLinha(it) {{
+        let cls = "item-row hover-row";
+        if (it.separado) cls += " separado";
+        if (it.faltou) cls += " faltou";
+        if (it.forcar_conferido) cls += " forcado";
+        return cls;
+      }}
+
+      function render() {{
+        const wrap = document.getElementById('grupos');
+        const q = (document.getElementById('busca').value || '').toLowerCase().trim();
+        let total = 0, marcados = 0;
+
+        let html = '';
+        for (const g of STATE.grupos) {{
+          const items = STATE.itens.filter(x => x.grupo_codigo === g.grupo_codigo)
+                                   .filter(x => !q || (String(x.codigo||'').includes(q) ||
+                                                       String(x.cod_barras||'').includes(q) ||
+                                                       String(x.descricao||'').toLowerCase().includes(q)));
+          if (!items.length) continue;
+
+          // header do grupo
+          html += `
+            <div class="card mb-3">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <div><strong>${'{'}g.grupo_codigo{'}'}</strong> — ${'{'}g.grupo_titulo{'}'}</div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-sm btn-success" onclick="marcarGrupo('${'{'}g.grupo_codigo{'}'}', true)">Marcar grupo</button>
+                  <button class="btn btn-sm btn-outline-light" onclick="marcarGrupo('${'{'}g.grupo_codigo{'}'}', false)">Desmarcar</button>
+                </div>
+              </div>
+              <div class="list-group list-group-flush">`;
+
+          // itens do grupo
+          for (const it of items) {{
+            total++;
+            if (it.separado) marcados++;
+            html += `
+              <div class="list-group-item ${'{'}pintaLinha(it){'}'}">
+                <div class="d-flex flex-column flex-md-row justify-content-between gap-2">
+                  <div class="flex-grow-1">
+                    <div class="fw-semibold">${'{'}it.descricao || ''{'}'}</div>
+                    <div class="text-secondary small">
+                      <span class="small-mono">Cód: ${'{'}it.codigo || '-'{'}'}</span> ·
+                      <span class="small-mono">EAN: ${'{'}it.cod_barras || '-'{'}'}</span> ·
+                      <span>${'{'}(it.fabricante||'').toUpperCase(){'}'}</span>
+                      ${'{'}it.forcar_conferido ? badge('FORÇADO', 'bg-warning text-dark') : ''{'}'}
+                      ${'{'}it.faltou ? badge('FALTOU', 'bg-danger') : ''{'}'}
+                      ${'{'}it.separado ? badge('SEPARADO', 'bg-success') : ''{'}'}
+                    </div>
+                    <div class="text-secondary small mt-1">
+                      Pedido: <span class="small-mono">${'{'}it.qtd_unidades{'}'} ${'{'}it.unidade || ''{'}'}${'{'}it.pack_qtd ? ' (C/ '+it.pack_qtd+' '+(it.pack_unid||'')+')' : ''{'}'}</span>
+                    </div>
+                  </div>
+                  <div class="d-flex flex-column align-items-start align-items-md-end gap-2">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" ${'{'}it.separado ? 'checked' : ''{'}'}
+                             onchange="toggleItem(${ '{'}it.id{'}' }, {{separado: this.checked}})">
+                      <label class="form-check-label">Separado</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" ${'{'}it.faltou ? 'checked' : ''{'}'}
+                             onchange="toggleItem(${ '{'}it.id{'}' }, {{faltou: this.checked}})">
+                      <label class="form-check-label">Faltou</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" ${'{'}it.forcar_conferido ? 'checked' : ''{'}'}
+                             onchange="toggleItem(${ '{'}it.id{'}' }, {{forcar_conferido: this.checked}})">
+                      <label class="form-check-label">Forçar conferido</label>
+                    </div>
+                    <div class="input-group input-group-sm">
+                      <span class="input-group-text">Sobrando</span>
+                      <input type="number" class="form-control" value="${'{'}it.sobrando || 0{'}'}"
+                             onchange="toggleItem(${ '{'}it.id{'}' }, {{sobrando: parseInt(this.value||0)}})">
+                    </div>
+                    <div class="input-group input-group-sm">
+                      <span class="input-group-text">Obs</span>
+                      <input type="text" class="form-control" value="${'{'}it.observacao || ''{'}'}"
+                             onchange="toggleItem(${ '{'}it.id{'}' }, {{observacao: this.value}})">
+                    </div>
+                  </div>
+                </div>
+              </div>`;
+          }}
+
+          html += `</div></div>`;
+        }}
+        wrap.innerHTML = html || '<div class="alert alert-secondary">Nenhum item para exibir.</div>';
+        document.getElementById('resumo').textContent = total ? (marcados + '/' + total + ' itens marcados') : '';
+      }}
+
+      async function carregar() {{
+        const r = await fetch('/api/mapa/' + encodeURIComponent(NUMERO_CARGA));
+        const data = await r.json();
+        STATE.grupos = data.grupos || [];
+        STATE.itens  = data.itens  || [];
+        render();
+      }}
+
+      async function toggleItem(id, patch) {{
+        // Atualiza o objeto local
+        const idx = STATE.itens.findIndex(x => x.id === id);
+        if (idx >= 0) Object.assign(STATE.itens[idx], patch);
+        render();
+        // Persiste no servidor
+        const body = Object.assign({{ item_id: id }}, patch);
+        await fetch('/api/mapa/item/atualizar', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(body)
+        }});
+      }}
+
+      async function marcarGrupo(grupo, flag) {{
+        // Otimista: marca no cliente
+        for (const it of STATE.itens) if (it.grupo_codigo === grupo) it.separado = !!flag;
+        render();
+        await fetch('/api/mapa/grupo/marcar', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ numero_carga: NUMERO_CARGA, grupo_codigo: grupo, separado: !!flag }})
+        }});
+      }}
+
+      document.getElementById('busca').addEventListener('input', render);
+      carregar();
+      </script>
+    </body></html>
+    """
+    return html
+
