@@ -2,6 +2,7 @@
 # 1. IMPORTAÇÕES
 # =================================================================
 from flask import Flask, jsonify, render_template, abort, request, Response
+from parser_mapa import parse_mapa
 import cloudinary, cloudinary.uploader, cloudinary.api
 import psycopg2, psycopg2.extras
 import json, os, re, io, fitz, shutil, requests
@@ -33,6 +34,8 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
+
+    # === Tabela já existente (seu app atual) ===
     cur.execute('''
         CREATE TABLE IF NOT EXISTS pedidos (
             id SERIAL PRIMARY KEY,
@@ -46,10 +49,62 @@ def init_db():
             url_pdf TEXT
         );
     ''')
+
+    # === NOVO: Tabelas do Mapa de Separação ===
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS cargas (
+          id SERIAL PRIMARY KEY,
+          numero_carga TEXT UNIQUE NOT NULL,
+          motorista TEXT,
+          descricao_romaneio TEXT,
+          peso_total NUMERIC,
+          entregas INTEGER,
+          data_emissao TEXT,
+          criado_em TIMESTAMP DEFAULT NOW()
+        );
+    ''')
+
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS carga_pedidos (
+          id SERIAL PRIMARY KEY,
+          numero_carga TEXT REFERENCES cargas(numero_carga) ON DELETE CASCADE,
+          pedido_numero TEXT
+        );
+    ''')
+
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS carga_grupos (
+          id SERIAL PRIMARY KEY,
+          numero_carga TEXT REFERENCES cargas(numero_carga) ON DELETE CASCADE,
+          grupo_codigo TEXT,
+          grupo_titulo TEXT
+        );
+    ''')
+
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS carga_itens (
+          id SERIAL PRIMARY KEY,
+          numero_carga TEXT REFERENCES cargas(numero_carga) ON DELETE CASCADE,
+          grupo_codigo TEXT,
+          fabricante TEXT,
+          codigo TEXT,
+          cod_barras TEXT,
+          descricao TEXT,
+          qtd_unidades INTEGER,
+          unidade TEXT,
+          pack_qtd INTEGER,
+          pack_unid TEXT,
+          observacao TEXT DEFAULT '',
+          separado BOOLEAN DEFAULT FALSE,
+          forcar_conferido BOOLEAN DEFAULT FALSE,
+          faltou BOOLEAN DEFAULT FALSE,
+          sobrando INTEGER DEFAULT 0
+        );
+    ''')
+
     conn.commit()
     cur.close()
     conn.close()
-
 
 def extrair_dados_do_pdf(stream, nome_da_carga, nome_arquivo):
     try:
@@ -538,3 +593,87 @@ def resetar_dia():
     finally:
         if conn: 
             cur.close(); conn.close()
+
+@app.route('/mapa/upload', methods=['GET', 'POST'])
+def mapa_upload():
+    if request.method == 'GET':
+        return '''
+        <form method="post" enctype="multipart/form-data" style="padding:20px">
+          <h3>Upload do Mapa de Separação (PDF)</h3>
+          <input type="file" name="pdf" accept="application/pdf" required />
+          <button type="submit">Enviar</button>
+        </form>
+        '''
+
+    f = request.files.get('pdf')
+    if not f:
+        return "Envie um PDF", 400
+
+    path_tmp = f"/tmp/{f.filename}"
+    f.save(path_tmp)
+
+    try:
+        header, pedidos_map, grupos, itens = parse_mapa(path_tmp)
+    except Exception as e:
+        return f"Erro ao ler mapa: {e}", 400
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # UPSERT da carga
+    cur.execute("""
+        INSERT INTO cargas (numero_carga, motorista, descricao_romaneio, peso_total, entregas, data_emissao)
+        VALUES (%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (numero_carga) DO UPDATE SET
+            motorista=EXCLUDED.motorista,
+            descricao_romaneio=EXCLUDED.descricao_romaneio,
+            peso_total=EXCLUDED.peso_total,
+            entregas=EXCLUDED.entregas,
+            data_emissao=EXCLUDED.data_emissao
+    """, (
+        header.get("numero_carga"),
+        header.get("motorista"),
+        header.get("descricao_romaneio"),
+        str(header.get("peso_total") or "").replace('.', '').replace(',', '.'),
+        int(header.get("entregas") or 0),
+        header.get("data_emissao"),
+    ))
+
+    # Sincroniza tabelas filhas
+    cur.execute("DELETE FROM carga_pedidos WHERE numero_carga=%s", (header["numero_carga"],))
+    cur.execute("DELETE FROM carga_grupos  WHERE numero_carga=%s", (header["numero_carga"],))
+    cur.execute("DELETE FROM carga_itens   WHERE numero_carga=%s", (header["numero_carga"],))
+
+    for p in pedidos_map:
+        cur.execute("INSERT INTO carga_pedidos (numero_carga, pedido_numero) VALUES (%s,%s)",
+                    (header["numero_carga"], p))
+
+    for g in grupos:
+        cur.execute("""
+            INSERT INTO carga_grupos (numero_carga, grupo_codigo, grupo_titulo)
+            VALUES (%s,%s,%s)
+        """, (header["numero_carga"], g["codigo"], g["titulo"]))
+
+    for it in itens:
+        cur.execute("""
+            INSERT INTO carga_itens
+                (numero_carga, grupo_codigo, fabricante, codigo, cod_barras, descricao,
+                 qtd_unidades, unidade, pack_qtd, pack_unid)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            header["numero_carga"], it["grupo_codigo"], it["fabricante"], it["codigo"],
+            it["cod_barras"], it["descricao"], it["qtd_unidades"], it["unidade"],
+            it["pack_qtd"], it["pack_unid"]
+        ))
+
+    conn.commit()
+    cur.close(); conn.close()
+
+    return jsonify({
+        "ok": True,
+        "numero_carga": header["numero_carga"],
+        "pedidos": pedidos_map,
+        "grupos": len(grupos),
+        "itens": len(itens)
+    })
+
