@@ -122,13 +122,14 @@
     </div>
   </div>
 
-<!-- ==== NOVO CARD: Importar Mapa de Separação (PDF) ==== -->
+<!-- ==== Importar Mapa de Separação (PDF) ==== -->
 <div class="card mb-4 shadow-sm">
   <div class="card-header">Importar Mapa de Separação (PDF)</div>
   <div class="card-body">
-    <form id="form-mapa" class="d-flex gap-2" enctype="multipart/form-data" onsubmit="return false;">
+    <form id="form-mapa" class="d-flex gap-2" enctype="multipart/form-data">
       <input class="form-control" type="file" name="pdf" accept="application/pdf" required />
-      <button id="btn-enviar-mapa" class="btn btn-warning">Enviar Mapa</button>
+      <!-- IMPORTANTE: botão do tipo button -->
+      <button type="button" id="btn-enviar-mapa" class="btn btn-warning">Enviar Mapa</button>
       <a href="/mapa" class="btn btn-outline-light">Abrir Mapas</a>
     </form>
     <div id="resultado-mapa" class="mt-3 small text-muted"></div>
@@ -137,29 +138,43 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-  const btnMapa = document.getElementById('btn-enviar-mapa');
-  if (!btnMapa) return;
+  const form = document.getElementById('form-mapa');
+  const btn  = document.getElementById('btn-enviar-mapa');
+  const out  = document.getElementById('resultado-mapa');
 
-  btnMapa.addEventListener('click', async () => {
-    const form = document.getElementById('form-mapa');
-    const fd = new FormData(form);
-    const out = document.getElementById('resultado-mapa');
+  // evita submit tradicional (Enter no input, etc.)
+  form.addEventListener('submit', (e) => e.preventDefault());
+
+  btn.addEventListener('click', async () => {
     out.textContent = 'Processando mapa...';
+    btn.disabled = true;
 
     try {
+      const fd   = new FormData(form);
       const resp = await fetch('/mapa/upload', { method: 'POST', body: fd });
+
+      // mostra erro HTTP com texto do servidor
       const text = await resp.text();
-      try {
-        const data = JSON.parse(text);
-        if (data.ok) {
-          out.innerHTML = `✅ Importado — <b>Carga:</b> ${data.numero_carga} | <b>Grupos:</b> ${data.grupos} | <b>Itens:</b> ${data.itens}
-                           <br><a class="link-info" href="/mapa">Abrir Mapas</a>`;
-        } else {
-          out.innerHTML = '⚠️ ' + text;
+      if (!resp.ok) {
+        out.innerHTML = '⚠️ Erro no upload: ' + (text || resp.status);
+      } else {
+        try {
+          const data = JSON.parse(text);
+          if (data.ok) {
+            out.innerHTML = `✅ Importado — <b>Carga:</b> ${data.numero_carga} | <b>Grupos:</b> ${data.grupos} | <b>Itens:</b> ${data.itens}
+                             <br><a class="link-info" href="/mapa">Abrir Mapas</a>`;
+          } else {
+            out.innerHTML = '⚠️ ' + text;
+          }
+        } catch {
+          // caso a rota devolva HTML (ex.: erro do parser)
+          out.innerHTML = text;
         }
-      } catch { out.innerHTML = text; }
-    } catch(e) {
+      }
+    } catch (e) {
       out.textContent = 'Erro ao enviar: ' + e.message;
+    } finally {
+      btn.disabled = false;
     }
   });
 });
