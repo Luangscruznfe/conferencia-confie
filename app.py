@@ -612,10 +612,11 @@ def mapa_upload():
     path_tmp = f"/tmp/{f.filename}"
     f.save(path_tmp)
 
-    try:
+        try:
         header, pedidos_map, grupos, itens = parse_mapa(path_tmp)
     except Exception as e:
-        return f"Erro ao ler mapa: {e}", 400
+        # retorna o erro detalhado pro front
+        return (f"Erro ao ler mapa: {str(e)}", 400)
 
     conn = get_db_connection()
     cur = conn.cursor()
