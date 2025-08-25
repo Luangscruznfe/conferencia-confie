@@ -612,10 +612,10 @@ def mapa_upload():
     path_tmp = f"/tmp/{f.filename}"
     f.save(path_tmp)
 
-        try:
+    try:
         header, pedidos_map, grupos, itens = parse_mapa(path_tmp)
     except Exception as e:
-        # retorna o erro detalhado pro front
+        # erro explícito para o front
         return (f"Erro ao ler mapa: {str(e)}", 400)
 
     conn = get_db_connection()
@@ -646,8 +646,10 @@ def mapa_upload():
     cur.execute("DELETE FROM carga_itens   WHERE numero_carga=%s", (header["numero_carga"],))
 
     for p in pedidos_map:
-        cur.execute("INSERT INTO carga_pedidos (numero_carga, pedido_numero) VALUES (%s,%s)",
-                    (header["numero_carga"], p))
+        cur.execute(
+            "INSERT INTO carga_pedidos (numero_carga, pedido_numero) VALUES (%s,%s)",
+            (header["numero_carga"], p)
+        )
 
     for g in grupos:
         cur.execute("""
@@ -677,6 +679,7 @@ def mapa_upload():
         "grupos": len(grupos),
         "itens": len(itens)
     })
+
 
 @app.route('/api/mapas')
 def api_mapas():
