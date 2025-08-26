@@ -136,46 +136,88 @@ def _match_item(line: str):
     return m
 
 def parse_groups_and_items(all_text: str):
-    grupos, itens, current_group = [], [], None
-    lines = [l for l in (s.strip() for s in all_text.splitlines()) if l]
+    def smart_item_parse(s: str):
+        s = " ".join((s or "").strip().split())
+        if not s:
+            return None
 
+        # 1) pack no final: "... C/ 21UN"
+        m = re.search(r"\sC/\s*(\d+)\s*([A-Z]+)\s*$", s, re.IGNORECASE)
+        pack_qtd = 0; pack_unid = ""
+        if m:
+            pack_qtd = int(m.group(1)); pack_unid = m.group(2).upper()
+            s = s[:m.start()].rstrip()
+
+        # 2) qtd/un no final: "... 7 DP"
+        m = re.search(r"\s(\d+)\s*([A-Z]{1,4})\s*$", s)
+        if not m:
+            return None
+        qtd_unidades = int(m.group(1)); unidade = m.group(2).upper()
+        s = s[:m.start()].rstrip()
+
+        # 3) código + fabricante no final: "... 17911 ADAMS"
+        m = re.search(r"\s(\d{3,})\s+([A-Z0-9À-Ú\-\&\. ]+)$", s)
+        fabricante = ""; codigo = ""
+        if m:
+            codigo = m.group(1)
+            fabricante = (m.group(2) or "").strip().upper()
+            s = s[:m.start()].rstrip()
+        else:
+            # tenta só o código no final
+            m = re.search(r"\s(\d{3,})\s*$", s)
+            if m:
+                codigo = m.group(1)
+                s = s[:m.start()].rstrip()
+
+        # 4) EAN opcional no começo
+        cod_barras = ""
+        m = re.match(r"^(\d{8,14})\s+(.*)$", s)
+        if m:
+            cod_barras = m.group(1)
+            s = m.group(2)
+
+        descricao = s.strip()
+        if not descricao:
+            return None
+        return {{
+            "fabricante": fabricante,
+            "codigo": codigo,
+            "cod_barras": cod_barras,
+            "descricao": descricao,
+            "qtd_unidades": qtd_unidades,
+            "unidade": unidade,
+            "pack_qtd": pack_qtd,
+            "pack_unid": pack_unid,
+        }}
+
+    grupos, itens, current_group = [], [], None
+    lines = [l.strip() for l in all_text.splitlines() if l.strip()]
     i = 0
     while i < len(lines):
         line = " ".join(lines[i].split())
+
+        # Grupo
         mg = RE_GRUPO.match(line)
         if mg:
-            current_group = {"codigo": mg.group(1).upper(), "titulo": mg.group(2).strip()}
-            grupos.append(current_group)
-            i += 1
-            continue
+            current_group = {{"codigo": mg.group(1).upper(), "titulo": mg.group(2).strip()}}
+            grupos.append(current_group); i += 1; continue
 
+        # Item
         if current_group:
-            mi = _match_item(line)
-            if not mi and i + 1 < len(lines):
-                # Tenta juntar com a próxima linha (quebra no meio da descrição)
-                joined = " ".join([line, lines[i+1]])
-                mi = _match_item(joined)
-                if mi:
+            # tenta linha atual; se falhar, tenta juntar com a próxima (quebra de descrição)
+            parsed = smart_item_parse(line)
+            if not parsed and i + 1 < len(lines):
+                parsed = smart_item_parse(line + " " + lines[i+1])
+                if parsed:
                     i += 1  # consumiu a próxima linha também
-
-            if mi:
-                d = mi.groupdict()
-                item = {
-                    "grupo_codigo": current_group["codigo"],
-                    "fabricante": (d.get("fabricante") or "").strip().upper(),
-                    "codigo": (d.get("codigo") or "").strip(),
-                    "cod_barras": (d.get("cod_barras") or "").replace(" ", ""),
-                    "descricao": (d.get("descricao") or "").strip(),
-                    "qtd_unidades": int(d.get("qtd_unidades") or 0),
-                    "unidade": (d.get("unidade") or "").strip().upper(),
-                    "pack_qtd": int(d.get("pack_qtd") or 0),
-                    "pack_unid": (d.get("pack_unid") or "").strip().upper(),
-                }
-                itens.append(item)
+            if parsed:
+                parsed["grupo_codigo"] = current_group["codigo"]
+                itens.append(parsed)
 
         i += 1
 
     return grupos, itens
+
 
 # =========================
 # 6) Orquestração
