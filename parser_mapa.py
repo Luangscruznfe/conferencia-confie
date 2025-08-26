@@ -1,6 +1,13 @@
 # parser_mapa.py (versão robusta)
 import re, fitz
 
+
+# Unidades de picking aceitas (quantidade separada)
+PICK_UNIDADES = {"UN","CX","FD","CJ","DP","PC","PT","DZ","SC","KT","JG","BF","PA"}
+# Unidades de peso/volume que NÃO são picking (vão ficar na descrição)
+WEIGHT_UNIDADES = {"G","KG","ML","L"}
+
+
 # =========================
 # 1) Cabeçalho (tolerante)
 # =========================
@@ -136,80 +143,31 @@ def _match_item(line: str):
     return m
 
 def parse_groups_and_items(all_text: str):
-    def smart_item_parse(s: str):
-        s = " ".join((s or "").strip().split())
-        if not s:
-            return None
-
-        # 1) pack no final: "... C/ 21UN"
-        m = re.search(r"\sC/\s*(\d+)\s*([A-Z]+)\s*$", s, re.IGNORECASE)
-        pack_qtd = 0; pack_unid = ""
-        if m:
-            pack_qtd = int(m.group(1)); pack_unid = m.group(2).upper()
-            s = s[:m.start()].rstrip()
-
-        # 2) qtd/un no final: "... 7 DP"
-        m = re.search(r"\s(\d+)\s*([A-Z]{1,4})\s*$", s)
-        if not m:
-            return None
-        qtd_unidades = int(m.group(1)); unidade = m.group(2).upper()
-        s = s[:m.start()].rstrip()
-
-        # 3) código + fabricante no final: "... 17911 ADAMS"
-        m = re.search(r"\s(\d{3,})\s+([A-Z0-9À-Ú\-\&\. ]+)$", s)
-        fabricante = ""; codigo = ""
-        if m:
-            codigo = m.group(1)
-            fabricante = (m.group(2) or "").strip().upper()
-            s = s[:m.start()].rstrip()
-        else:
-            # tenta só o código no final
-            m = re.search(r"\s(\d{3,})\s*$", s)
-            if m:
-                codigo = m.group(1)
-                s = s[:m.start()].rstrip()
-
-        # 4) EAN opcional no começo
-        cod_barras = ""
-        m = re.match(r"^(\d{8,14})\s+(.*)$", s)
-        if m:
-            cod_barras = m.group(1)
-            s = m.group(2)
-
-        descricao = s.strip()
-        if not descricao:
-            return None
-        return {{
-            "fabricante": fabricante,
-            "codigo": codigo,
-            "cod_barras": cod_barras,
-            "descricao": descricao,
-            "qtd_unidades": qtd_unidades,
-            "unidade": unidade,
-            "pack_qtd": pack_qtd,
-            "pack_unid": pack_unid,
-        }}
-
     grupos, itens, current_group = [], [], None
-    lines = [l.strip() for l in all_text.splitlines() if l.strip()]
+    # linhas não vazias, “comprimidas”
+    lines = [ " ".join(l.strip().split()) for l in all_text.splitlines() if l.strip() ]
     i = 0
     while i < len(lines):
-        line = " ".join(lines[i].split())
+        line = lines[i]
 
         # Grupo
         mg = RE_GRUPO.match(line)
         if mg:
-            current_group = {{"codigo": mg.group(1).upper(), "titulo": mg.group(2).strip()}}
-            grupos.append(current_group); i += 1; continue
+            current_group = {"codigo": mg.group(1).upper(), "titulo": mg.group(2).strip()}
+            grupos.append(current_group)
+            i += 1
+            continue
 
-        # Item
+        # Item: usa o parser inteligente (que já ignora G/KG/ML/L)
         if current_group:
-            # tenta linha atual; se falhar, tenta juntar com a próxima (quebra de descrição)
-            parsed = smart_item_parse(line)
+            parsed = try_parse_line(line)
             if not parsed and i + 1 < len(lines):
-                parsed = smart_item_parse(line + " " + lines[i+1])
+                # quebra de descrição? tenta juntar com a próxima
+                joined = f"{line} {lines[i+1]}"
+                parsed = try_parse_line(joined)
                 if parsed:
-                    i += 1  # consumiu a próxima linha também
+                    i += 1  # consumiu a próxima também
+
             if parsed:
                 parsed["grupo_codigo"] = current_group["codigo"]
                 itens.append(parsed)
@@ -240,3 +198,94 @@ def parse_mapa(path_pdf: str):
         raise ValueError("Não encontrei itens no PDF.")
 
     return header, pedidos, grupos, itens
+
+
+
+def _strip_pack_suffix(s: str):
+    m = re.search(r"\sC/\s*(\d+)\s*([A-Z]+)\s*$", s, re.IGNORECASE)
+    if not m:
+        return s, 0, ""
+    return s[:m.start()].rstrip(), int(m.group(1)), (m.group(2) or "").upper()
+
+def _strip_qty_unit(s: str):
+    # Só aceita como QTD/UN se UN estiver em PICK_UNIDADES
+    m = re.search(r"\s(\d+)\s*([A-Z]{1,4})\s*$", s)
+    if not m:
+        return s, 0, ""
+    un = (m.group(2) or "").upper()
+    if un not in PICK_UNIDADES:
+        return s, 0, ""
+    return s[:m.start()].rstrip(), int(m.group(1)), un
+
+def try_parse_line(line: str):
+    """
+    Tenta parsear UMA linha de item.
+    Formatos aceitos:
+      - 'EAN DESCRICAO COD FAB QTD UN [C/ PACK]'
+      - 'DESCRICAO COD FAB QTD UN [C/ PACK]'
+      - variações com/sem EAN/fabricante
+    """
+    s = " ".join((line or "").strip().split())
+    if not s:
+        return None
+
+    # 1) tira pack do final, se houver
+    s, pack_qtd, pack_unid = _strip_pack_suffix(s)
+
+    # 2) tira QTD/UN do final (somente se UN ∈ PICK_UNIDADES)
+    s, qtd, un = _strip_qty_unit(s)
+
+    # 3) tenta COD + FAB no final
+    m = re.search(r"\s(\d{3,})\s+([A-Z0-9À-Ú\-\&\. ]+)$", s)
+    codigo = ""; fabricante = ""
+    if m:
+        codigo = m.group(1)
+        fabricante = (m.group(2) or "").strip().upper()
+        s = s[:m.start()].rstrip()
+    else:
+        # tenta só COD no final
+        m = re.search(r"\s(\d{3,})\s*$", s)
+        if m:
+            codigo = m.group(1)
+            s = s[:m.start()].rstrip()
+
+    # 4) EAN no começo OU no meio
+    cod_barras = ""
+    m = re.match(r"^(\d{8,14})\s+(.*)$", s)
+    if m:
+        cod_barras = m.group(1)
+        s = m.group(2)
+    if not cod_barras:
+        mm = re.search(r"\b(\d{8,14})\b", s)
+        if mm:
+            cod_barras = mm.group(1)
+            s = (s[:mm.start()] + " " + s[mm.end():]).strip()
+            s = re.sub(r"\s{2,}", " ", s)
+
+    descricao = s.strip()
+    if not descricao:
+        return None
+
+    return {
+        "fabricante": fabricante,
+        "codigo": codigo,
+        "cod_barras": cod_barras,
+        "descricao": descricao,
+        "qtd_unidades": qtd,
+        "unidade": un,
+        "pack_qtd": pack_qtd,
+        "pack_unid": pack_unid,
+    }
+
+
+
+def debug_extrator(path_pdf: str):
+    """Devolve as linhas cruas e como cada uma foi parseada (ou não)."""
+    from parser_mapa import extract_text_from_pdf  # evita import circular se mover
+    raw = extract_text_from_pdf(path_pdf)
+    lines = [l for l in raw.splitlines()]
+    out = []
+    for i, ln in enumerate(lines, 1):
+        parsed = try_parse_line(ln)
+        out.append({"n": i, "line": ln, "parsed": parsed})
+    return out

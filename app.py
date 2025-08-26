@@ -1015,3 +1015,93 @@ def mapa_detalhe(numero_carga):
     return html
 
 
+@app.route('/mapa/extrator', methods=['GET', 'POST'])
+def mapa_extrator():
+    # Página simples pra fazer upload e ver como o servidor leu o PDF linha a linha
+    if request.method == 'GET':
+        return '''
+        <!doctype html><html lang="pt-br"><head>
+        <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Extrator de Debug</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+          body{background:#0f1115;color:#e9edf3}
+          .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+          .ok{background:rgba(35,171,103,.14)}
+          .fail{background:rgba(239,68,68,.12)}
+          table{font-size:.9rem}
+          td,th{vertical-align:top}
+          pre{white-space:pre-wrap}
+        </style></head><body class="p-3">
+        <a class="btn btn-outline-light mb-3" href="/gestao">← Gestão</a>
+        <h3>Extrator de Debug do Mapa (PDF)</h3>
+        <p class="text-secondary">Envie um PDF para ver as linhas lidas e como cada uma foi interpretada.</p>
+        <form method="post" enctype="multipart/form-data" class="d-flex gap-2 mb-4">
+          <input class="form-control" type="file" name="pdf" accept="application/pdf" required>
+          <button class="btn btn-warning">Processar</button>
+        </form>
+        </body></html>
+        '''
+
+    f = request.files.get('pdf')
+    if not f:
+        return "Envie um PDF", 400
+
+    from werkzeug.utils import secure_filename
+    path_tmp = f"/tmp/{secure_filename(f.filename)}"
+    f.save(path_tmp)
+
+    try:
+        # usa as funções de debug do parser
+        from parser_mapa import debug_extrator
+        rows = debug_extrator(path_tmp)
+    except Exception as e:
+        return (f"Erro no extrator: {e}", 400)
+
+    # monta uma tabela HTML simples
+    head = '''
+    <!doctype html><html lang="pt-br"><head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Resultado do Extrator</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+      body{background:#0f1115;color:#e9edf3}
+      .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+      .ok{background:rgba(35,171,103,.14)}
+      .fail{background:rgba(239,68,68,.12)}
+      table{font-size:.9rem}
+      td,th{vertical-align:top}
+      pre{white-space:pre-wrap}
+      .pill{display:inline-block;padding:.1rem .4rem;border-radius:.5rem;background:#1b2537;margin-right:.25rem}
+    </style></head><body class="p-3">
+    <a class="btn btn-outline-light mb-3" href="/mapa/extrator">← Novo arquivo</a>
+    <h4 class="mb-3">Linhas lidas e parsing</h4>
+    <div class="mb-2">
+      <span class="pill">QTD/UN aceitas: UN, CX, FD, CJ, DP, PC, PT, DZ, SC, KT, JG, BF, PA</span>
+      <span class="pill">Peso/Volume ignorado: G, KG, ML, L</span>
+    </div>
+    <div class="table-responsive"><table class="table table-sm table-dark table-striped align-middle">
+      <thead><tr>
+        <th>#</th><th>Linha (crua)</th><th>Descrição</th><th>Código</th><th>Fabricante</th>
+        <th>EAN</th><th>Qtd</th><th>Un</th><th>Pack</th>
+      </tr></thead><tbody>'''
+    rows_html = []
+    for r in rows:
+        p = r["parsed"] or {}
+        cls = "ok" if p else "fail"
+        rows_html.append(f"<tr class='{cls}'>"
+                         f"<td class='mono'>{r['n']}</td>"
+                         f"<td class='mono'><pre>{(r['line'] or '').replace('<','&lt;').replace('>','&gt;')}</pre></td>"
+                         f"<td class='mono'>{(p.get('descricao') or '')}</td>"
+                         f"<td class='mono'>{(p.get('codigo') or '')}</td>"
+                         f"<td class='mono'>{(p.get('fabricante') or '')}</td>"
+                         f"<td class='mono'>{(p.get('cod_barras') or '')}</td>"
+                         f"<td class='mono'>{(p.get('qtd_unidades') or '')}</td>"
+                         f"<td class='mono'>{(p.get('unidade') or '')}</td>"
+                         f"<td class='mono'>{( (str(p.get('pack_qtd'))+' '+p.get('pack_unid','')) if p.get('pack_qtd') else '' )}</td>"
+                         f"</tr>")
+    tail = "</tbody></table></div></body></html>"
+    return head + "\n".join(rows_html) + tail
+
+
+
