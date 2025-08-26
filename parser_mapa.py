@@ -1,6 +1,17 @@
 # parser_mapa.py (versão robusta)
 import re, fitz
 
+HEAD_IGNORES = (
+    "SEPARAÇÃO DE CARGA",
+    "FABRIC.CÓDIGO", "FABRIC.CODIGO",
+    "CÓD. BARRAS", "COD. BARRAS",
+    "PAG.:",
+    "DATA EMISSÃO", "MOTORISTA",
+    "PESO TOTAL", "ENTREGAS",
+    "PEDIDOS:", "NÚMERO DA CARGA", "NUMERO DA CARGA"
+)
+
+
 
 # Unidades de picking aceitas (quantidade separada)
 PICK_UNIDADES = {"UN","CX","FD","CJ","DP","PC","PT","DZ","SC","KT","JG","BF","PA"}
@@ -164,14 +175,15 @@ def _match_item(line: str):
 def parse_groups_and_items(all_text: str):
     grupos, itens, current_group = [], [], None
     lines = [" ".join(l.strip().split()) for l in all_text.splitlines() if l.strip()]
-
-    # buffers quando o PDF traz "1 CX" / "C/ 32 UN" em linhas soltas antes do item
-    pending_qty = None   # (qtd, un)
-    pending_pack = None  # (pack_qtd, pack_unid)
-
     i = 0
     while i < len(lines):
         line = lines[i]
+
+        # >>> IGNORA cabeçalhos/rodapés do PDF
+        upper = line.upper()
+        if any(token in upper for token in HEAD_IGNORES):
+            i += 1
+            continue
 
         # Grupo
         mg = RE_GRUPO.match(line)
@@ -291,51 +303,94 @@ def _strip_qty_unit(s: str):
         return s, 0, ""
     return s[:m.start()].rstrip(), int(m.group(1)), un
 
+def _strip_pack_prefix(s: str):
+    """
+    Captura 'C/ 12UN' no COMEÇO da linha, mesmo se vier grudado no fabricante,
+    ex.: 'C/ 12UNRICLAN...' → retorna ('RICLAN...', 12, 'UN')
+    """
+    s0 = (s or "").lstrip()
+    m = re.match(r"^C/\s*(\d+)\s*([A-Z]{1,4})", s0, re.IGNORECASE)
+    if not m:
+        return s, 0, ""
+    rest = s0[m.end():].lstrip()
+    return rest, int(m.group(1)), (m.group(2) or "").upper()
+
+
 def try_parse_line(line: str):
+    """
+    Tenta parsear UMA linha de item.
+    Exemplos cobertos:
+      - 'C/ 12UN RICLAN 24661 7891151040457 GOMA GO JELLY ... 2 CX'
+      - 'RICLAN24661 7891151040457 GOMA GO JELLY ... 2 CX'
+      - 'EAN DESCRICAO COD FAB 7 DP (C/ 21UN)'
+      - com/sem EAN, com pack no início/fim/linha separada
+    """
     s = " ".join((line or "").strip().split())
     if not s:
         return None
 
-    # Se a linha for só "C/ 15 UN" ou só "1 DP", descarta aqui
-    if _is_only_pack(s) or _is_only_qty(s):
+    # linhas-ruído (só qtd/un ou só pack) NÃO viram item
+    if _is_only_qty(s) or _is_only_pack(s):
         return None
 
-    # 1) tira pack do final, se houver
-    s, pack_qtd, pack_unid = _strip_pack_suffix(s)
+    # 0) Pack no INÍCIO (ex.: 'C/ 12UNRICLAN...')
+    s, pack_qtd_pref, pack_unid_pref = _strip_pack_prefix(s)
 
-    # 2) tira QTD/UN do final (somente se UN ∈ PICK_UNIDADES)
+    # 1) Pack no FIM (ex.: '... (C/ 12UN)' ou '... C/ 12 UN')
+    s, pack_qtd_suf, pack_unid_suf = _strip_pack_suffix(s)
+
+    # 2) Quantidade+unidade no FIM (só unidades de picking)
     s, qtd, un = _strip_qty_unit(s)
 
-    # 3) tenta COD + FAB no final
-    m = re.search(r"\s(\d{3,})\s+([A-Z0-9À-Ú\-\&\. ]+)$", s)
-    codigo = ""; fabricante = ""
-    if m:
-        codigo = m.group(1)
-        fabricante = (m.group(2) or "").strip().upper()
-        s = s[:m.start()].rstrip()
-    else:
-        # tenta só COD no final
-        m = re.search(r"\s(\d{3,})\s*$", s)
-        if m:
-            codigo = m.group(1)
-            s = s[:m.start()].rstrip()
-
-    # 4) EAN no começo OU no meio
+    # 3) EAN no começo ou no MEIO (aceita 12–14 dígitos, pega o primeiro bloco)
     cod_barras = ""
-    m = re.match(r"^(\d{8,14})\s+(.*)$", s)
+    m = re.match(r"^(\d{12,14})\s+(.*)$", s)   # começo
     if m:
-        cod_barras = m.group(1)
-        s = m.group(2)
+        cod_barras = m.group(1); s = m.group(2)
     if not cod_barras:
-        mm = re.search(r"\b(\d{8,14})\b", s)
+        mm = re.search(r"(\d{12,14})", s)     # no meio
         if mm:
             cod_barras = mm.group(1)
             s = (s[:mm.start()] + " " + s[mm.end():]).strip()
             s = re.sub(r"\s{2,}", " ", s)
 
+    # 4) fabricante + código
+    codigo = ""; fabricante = ""
+
+    # 4a) padrão no INÍCIO grudado: ex. 'RICLAN24661 ...'
+    m = re.match(r"^([A-Z][A-Z0-9À-Ú\-\&\.]{2,}?)(\d{3,})\b(?:\s+|$)", s)
+    if m:
+        fabricante = m.group(1).strip().upper()
+        codigo = m.group(2)
+        s = s[m.end():].lstrip()
+    else:
+        # 4b) início com espaço: 'RICLAN 24661 ...'
+        m = re.match(r"^([A-Z][A-Z0-9À-Ú\-\&\. ]+?)\s+(\d{3,})\b", s)
+        if m and len(m.group(1).split()) <= 3:  # evita capturar descrição longa como “fabricante”
+            fabricante = m.group(1).strip().upper()
+            codigo = m.group(2)
+            s = s[m.end():].lstrip()
+        else:
+            # 4c) fim da linha: '... 24661 RICLAN'
+            m = re.search(r"\s(\d{3,})\s+([A-Z0-9À-Ú\-\&\. ]+)$", s)
+            if m:
+                codigo = m.group(1)
+                fabricante = (m.group(2) or "").strip().upper()
+                s = s[:m.start()].rstrip()
+            else:
+                # 4d) só o código no fim
+                m = re.search(r"\s(\d{3,})\s*$", s)
+                if m:
+                    codigo = m.group(1)
+                    s = s[:m.start()].rstrip()
+
     descricao = s.strip()
     if not descricao:
         return None
+
+    # escolhe o pack capturado (prefere prefixo; se não tiver, usa sufixo)
+    pack_qtd = pack_qtd_pref or pack_qtd_suf or 0
+    pack_unid = (pack_unid_pref or pack_unid_suf or "").upper()
 
     return {
         "fabricante": fabricante,
@@ -343,10 +398,11 @@ def try_parse_line(line: str):
         "cod_barras": cod_barras,
         "descricao": descricao,
         "qtd_unidades": qtd,
-        "unidade": un,
+        "unidade": (un or "").upper(),
         "pack_qtd": pack_qtd,
         "pack_unid": pack_unid,
     }
+
 
 
 
