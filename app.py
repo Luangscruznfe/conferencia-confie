@@ -580,19 +580,58 @@ def gerar_relatorio():
 
 @app.route('/api/resetar-dia', methods=['POST'])
 def resetar_dia():
+    # você pode enviar JSON {"mapas": true/false, "pedidos": true/false}
+    opts = request.get_json(silent=True) or {}
+    limpa_mapas = opts.get("mapas", True)
+    limpa_pedidos = opts.get("pedidos", True)
+
     conn = None
+    cur = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("TRUNCATE TABLE pedidos RESTART IDENTITY;")
+
+        if limpa_mapas:
+            try:
+                # se houver FKs, CASCADE resolve
+                cur.execute("""
+                    TRUNCATE TABLE
+                        carga_itens,
+                        carga_grupos,
+                        carga_pedidos,
+                        cargas
+                    RESTART IDENTITY CASCADE;
+                """)
+            except Exception:
+                # fallback seguro: apaga na ordem certa
+                cur.execute("DELETE FROM carga_itens;")
+                cur.execute("DELETE FROM carga_grupos;")
+                cur.execute("DELETE FROM carga_pedidos;")
+                cur.execute("DELETE FROM cargas;")
+
+        if limpa_pedidos:
+            try:
+                cur.execute("TRUNCATE TABLE pedidos RESTART IDENTITY CASCADE;")
+            except Exception:
+                cur.execute("DELETE FROM pedidos;")
+
         conn.commit()
-        return jsonify({"sucesso": True, "mensagem": "Todos os pedidos foram apagados. O sistema está pronto para um novo dia."})
+        return jsonify({
+            "sucesso": True,
+            "mensagem": "Dados do dia resetados.",
+            "detalhe": {"mapas": limpa_mapas, "pedidos": limpa_pedidos}
+        })
     except Exception as e:
-        import traceback; traceback.print_exc()
+        if conn:
+            conn.rollback()
+        app.logger.exception("Falha ao resetar dia")
         return jsonify({"sucesso": False, "erro": str(e)}), 500
     finally:
-        if conn: 
-            cur.close(); conn.close()
+        try:
+            if cur: cur.close()
+        finally:
+            if conn: conn.close()
+
 
 @app.route('/mapa/upload', methods=['GET', 'POST'])
 def mapa_upload():

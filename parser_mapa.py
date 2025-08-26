@@ -8,6 +8,25 @@ PICK_UNIDADES = {"UN","CX","FD","CJ","DP","PC","PT","DZ","SC","KT","JG","BF","PA
 WEIGHT_UNIDADES = {"G","KG","ML","L"}
 
 
+PACK_ONLY_RE = re.compile(r"^C/\s*(\d+)\s*([A-Z]{1,4})$", re.IGNORECASE)
+QTY_ONLY_RE  = re.compile(r"^(\d+)\s*([A-Z]{1,4})$", re.IGNORECASE)
+
+def _is_only_pack(s: str):
+    m = PACK_ONLY_RE.match(" ".join((s or "").strip().split()))
+    if not m:
+        return None
+    return int(m.group(1)), (m.group(2) or "").upper()
+
+def _is_only_qty(s: str):
+    m = QTY_ONLY_RE.match(" ".join((s or "").strip().split()))
+    if not m:
+        return None
+    un = (m.group(2) or "").upper()
+    if un not in PICK_UNIDADES:   # ignora peso/volume como “quantidade”
+        return None
+    return int(m.group(1)), un
+
+
 # =========================
 # 1) Cabeçalho (tolerante)
 # =========================
@@ -144,13 +163,12 @@ def _match_item(line: str):
 
 def parse_groups_and_items(all_text: str):
     grupos, itens, current_group = [], [], None
-    # linhas não vazias, “comprimidas”
-    lines = [ " ".join(l.strip().split()) for l in all_text.splitlines() if l.strip() ]
+    lines = [" ".join(l.strip().split()) for l in all_text.splitlines() if l.strip()]
     i = 0
     while i < len(lines):
         line = lines[i]
 
-        # Grupo
+        # Cabeçalho de grupo
         mg = RE_GRUPO.match(line)
         if mg:
             current_group = {"codigo": mg.group(1).upper(), "titulo": mg.group(2).strip()}
@@ -158,23 +176,67 @@ def parse_groups_and_items(all_text: str):
             i += 1
             continue
 
-        # Item: usa o parser inteligente (que já ignora G/KG/ML/L)
-        if current_group:
-            parsed = try_parse_line(line)
-            if not parsed and i + 1 < len(lines):
-                # quebra de descrição? tenta juntar com a próxima
-                joined = f"{line} {lines[i+1]}"
-                parsed = try_parse_line(joined)
-                if parsed:
-                    i += 1  # consumiu a próxima também
+        if not current_group:
+            i += 1
+            continue
 
+        # 1) Tenta parsear a linha atual
+        parsed = try_parse_line(line)
+
+        # 2) Se não deu, tenta juntar com a PRÓXIMA (quebra de descrição)
+        if not parsed and i + 1 < len(lines):
+            join_next = f"{line} {lines[i+1]}"
+            parsed = try_parse_line(join_next)
             if parsed:
-                parsed["grupo_codigo"] = current_group["codigo"]
+                i += 1  # consumiu a próxima linha
+
+        # 3) Se parseou mas ficou sem QTD/UN e/ou PACK, tenta olhar PRÓXIMA linha
+        if parsed and i + 1 < len(lines):
+            nxt = lines[i+1]
+            got = False
+
+            # 3a) só quantidade/unidade na próxima?
+            qty = _is_only_qty(nxt)
+            if qty and not parsed.get("qtd_unidades"):
+                parsed["qtd_unidades"], parsed["unidade"] = qty
+                i += 1   # consome a próxima
+                got = True
+
+            # 3b) depois da qtd pode vir um PACK ainda
+            if got and i + 1 < len(lines):
+                nxt2 = lines[i+1]
+                pk = _is_only_pack(nxt2)
+                if pk and not parsed.get("pack_qtd"):
+                    parsed["pack_qtd"], parsed["pack_unid"] = pk
+                    i += 1  # consome mais uma
+
+            # 3c) ou pode ser só o PACK na próxima (sem qtd)
+            if not got:
+                pk = _is_only_pack(nxt)
+                if pk and not parsed.get("pack_qtd"):
+                    parsed["pack_qtd"], parsed["pack_unid"] = pk
+                    i += 1  # consome a próxima
+
+        # 4) Caso típico inverso: a PRÓXIMA linha é "1 UN" e a ATUAL é só descrição
+        if not parsed and i + 1 < len(lines):
+            qty = _is_only_qty(lines[i+1])
+            if qty and i - 1 >= 0:
+                # tenta colar a próxima (1 UN) na ATUAL
+                parsed = try_parse_line(f"{line} {lines[i+1]}")
+                if parsed:
+                    parsed["qtd_unidades"], parsed["unidade"] = qty
+                    i += 1  # consome a próxima
+
+        if parsed:
+            parsed["grupo_codigo"] = current_group["codigo"]
+            # Sanidade: precisa ter pelo menos descrição e (código ou fabricante ou EAN)
+            if parsed["descricao"] and (parsed["codigo"] or parsed["fabricante"] or parsed["cod_barras"]):
                 itens.append(parsed)
 
         i += 1
 
     return grupos, itens
+
 
 
 # =========================
@@ -218,15 +280,12 @@ def _strip_qty_unit(s: str):
     return s[:m.start()].rstrip(), int(m.group(1)), un
 
 def try_parse_line(line: str):
-    """
-    Tenta parsear UMA linha de item.
-    Formatos aceitos:
-      - 'EAN DESCRICAO COD FAB QTD UN [C/ PACK]'
-      - 'DESCRICAO COD FAB QTD UN [C/ PACK]'
-      - variações com/sem EAN/fabricante
-    """
     s = " ".join((line or "").strip().split())
     if not s:
+        return None
+
+    # Se a linha for só "C/ 15 UN" ou só "1 DP", descarta aqui
+    if _is_only_pack(s) or _is_only_qty(s):
         return None
 
     # 1) tira pack do final, se houver
