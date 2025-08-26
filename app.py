@@ -825,24 +825,71 @@ def api_mapa_grupo_marcar():
 
 @app.route('/mapa/<numero_carga>')
 def mapa_detalhe(numero_carga):
-    """Tela de separação por grupos/itens, com checkboxes e ações."""
-    # HTML simples, carrega dados via /api/mapa/<numero_carga> e monta a UI no front
+    import json
     html = f"""
     <!DOCTYPE html><html lang="pt-br"><head>
       <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Mapa {numero_carga}</title>
       <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
       <style>
-        body {{ background:#0f1115; color:#e8e8e8; }}
-        .card {{ background:#161a22; border-color:#263043; }}
-        .tag {{ font-size:.75rem; opacity:.8; }}
-        .item-row.separado {{ background:rgba(40,167,69,.12); }}
-        .item-row.faltou {{ background:rgba(220,53,69,.12); }}
-        .item-row.forcado {{ outline:1px dashed #ffc107; }}
-        .sticky-top-bar {{ position:sticky; top:0; z-index:1020; background:#0f1115; padding:.75rem 0; }}
+        :root {{
+          --bg:#0f1115;
+          --panel:#161a22;
+          --panel-2:#121722;
+          --ink:#e9edf3;
+          --muted:#aab4c4;
+          --line:#2a364a;
+          --ok:#1f9d61;
+          --ok-bg: rgba(35,171,103,.18);
+          --warn:#ffd166;
+          --err: #ef4444;
+          --err-bg: rgba(239,68,68,.18);
+          --input-bg:#0f141b;
+          --input-line:#2a3b5e;
+          --input-chip:#233049;
+        }}
+        body {{ background:var(--bg); color:var(--ink); }}
+        .card {{ background:var(--panel); border-color:var(--line); }}
+        .card-header {{ 
+          background:var(--panel-2); 
+          color:var(--ink); 
+          border-bottom-color:var(--line);
+          font-weight:700; letter-spacing:.2px;
+        }}
+        .tag {{ font-size:.75rem; }}
+        .badge.bg-warning.text-dark {{ color:#1b1f29 !important; }} /* amarelo com texto escuro */
+
+        /* Botões visíveis no tema escuro */
+        .btn-success {{ background:var(--ok); border-color:var(--ok); }}
+        .btn-outline-light {{ color:var(--ink); border-color:#cfd6e4; }}
+        .btn-outline-light:hover {{ background:var(--ink); color:#0f1115; }}
+
+        /* Linhas dos itens com contraste e inputs legíveis */
+        .item-row {{ border-color:#222c3f; }}
+        .item-row.separado {{ background:var(--ok-bg); }}
+        .item-row.faltou   {{ background:var(--err-bg); }}
+        .item-row.forcado  {{ outline:1px dashed var(--warn); }}
+        .item-row .small-mono {{ color:#f3f6ff; }}
+        .item-row .form-check-label {{ color:var(--ink); }}
+        .item-row .form-check-input {{ cursor:pointer; }}
+        .item-row input.form-control {{ 
+          background:var(--input-bg); 
+          color:var(--ink); 
+          border-color:var(--input-line);
+        }}
+        .item-row .input-group-text {{ 
+          background:var(--input-chip); 
+          color:#dbe2f1; 
+          border-color:var(--input-line);
+        }}
+
+        .sticky-top-bar {{ position:sticky; top:0; z-index:1020; background:var(--bg); padding:.75rem 0; }}
         .search-input::placeholder {{ color:#9aa3b2; }}
         .hover-row:hover {{ background:#1b2130; }}
-        .small-mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }}
+        .small-mono {{
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; 
+          font-size:.95rem;
+        }}
       </style>
     </head><body>
       <div class="container py-3">
@@ -872,9 +919,8 @@ def mapa_detalhe(numero_carga):
       let STATE = {{ grupos: [], itens: [] }};
 
       function badge(txt, cls) {{
-        return `<span class="badge ${'{'}cls{'}'} ms-1 tag">${'{'}txt{'}'}</span>`;
+        return '<span class="badge ' + cls + ' ms-1 tag">' + txt + '</span>';
       }}
-
       function pintaLinha(it) {{
         let cls = "item-row hover-row";
         if (it.separado) cls += " separado";
@@ -888,81 +934,86 @@ def mapa_detalhe(numero_carga):
         const q = (document.getElementById('busca').value || '').toLowerCase().trim();
         let total = 0, marcados = 0;
 
-        let html = '';
+        let htmlStr = '';
         for (const g of STATE.grupos) {{
-          const items = STATE.itens.filter(x => x.grupo_codigo === g.grupo_codigo)
-                                   .filter(x => !q || (String(x.codigo||'').includes(q) ||
-                                                       String(x.cod_barras||'').includes(q) ||
-                                                       String(x.descricao||'').toLowerCase().includes(q)));
+          const items = STATE.itens
+            .filter(x => x.grupo_codigo === g.grupo_codigo)
+            .filter(x => !q || (String(x.codigo||'').includes(q) ||
+                                String(x.cod_barras||'').includes(q) ||
+                                String(x.descricao||'').toLowerCase().includes(q)));
           if (!items.length) continue;
 
-          // header do grupo
-          html += `
-            <div class="card mb-3">
-              <div class="card-header d-flex justify-content-between align-items-center">
-                <div><strong>${'{'}g.grupo_codigo{'}'}</strong> — ${'{'}g.grupo_titulo{'}'}</div>
-                <div class="d-flex gap-2">
-                  <button class="btn btn-sm btn-success" onclick="marcarGrupo('${'{'}g.grupo_codigo{'}'}', true)">Marcar grupo</button>
-                  <button class="btn btn-sm btn-outline-light" onclick="marcarGrupo('${'{'}g.grupo_codigo{'}'}', false)">Desmarcar</button>
-                </div>
-              </div>
-              <div class="list-group list-group-flush">`;
+          htmlStr += ''
+            + '<div class="card mb-3">'
+              + '<div class="card-header d-flex justify-content-between align-items-center">'
+                + '<div><strong>' + g.grupo_codigo + '</strong> — ' + (g.grupo_titulo||'') + '</div>'
+                + '<div class="d-flex gap-2">'
+                  + '<button class="btn btn-sm btn-success" onclick="marcarGrupo(\\'' + g.grupo_codigo + '\\', true)">Marcar grupo</button>'
+                  + '<button class="btn btn-sm btn-outline-light" onclick="marcarGrupo(\\'' + g.grupo_codigo + '\\', false)">Desmarcar</button>'
+                + '</div>'
+              + '</div>'
+              + '<div class="list-group list-group-flush">';
 
-          // itens do grupo
           for (const it of items) {{
             total++;
             if (it.separado) marcados++;
-            html += `
-              <div class="list-group-item ${'{'}pintaLinha(it){'}'}">
-                <div class="d-flex flex-column flex-md-row justify-content-between gap-2">
-                  <div class="flex-grow-1">
-                    <div class="fw-semibold">${'{'}it.descricao || ''{'}'}</div>
-                    <div class="text-secondary small">
-                      <span class="small-mono">Cód: ${'{'}it.codigo || '-'{'}'}</span> ·
-                      <span class="small-mono">EAN: ${'{'}it.cod_barras || '-'{'}'}</span> ·
-                      <span>${'{'}(it.fabricante||'').toUpperCase(){'}'}</span>
-                      ${'{'}it.forcar_conferido ? badge('FORÇADO', 'bg-warning text-dark') : ''{'}'}
-                      ${'{'}it.faltou ? badge('FALTOU', 'bg-danger') : ''{'}'}
-                      ${'{'}it.separado ? badge('SEPARADO', 'bg-success') : ''{'}'}
-                    </div>
-                    <div class="text-secondary small mt-1">
-                      Pedido: <span class="small-mono">${'{'}it.qtd_unidades{'}'} ${'{'}it.unidade || ''{'}'}${'{'}it.pack_qtd ? ' (C/ '+it.pack_qtd+' '+(it.pack_unid||'')+')' : ''{'}'}</span>
-                    </div>
-                  </div>
-                  <div class="d-flex flex-column align-items-start align-items-md-end gap-2">
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" ${'{'}it.separado ? 'checked' : ''{'}'}
-                             onchange="toggleItem(${ '{'}it.id{'}' }, {{separado: this.checked}})">
-                      <label class="form-check-label">Separado</label>
-                    </div>
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" ${'{'}it.faltou ? 'checked' : ''{'}'}
-                             onchange="toggleItem(${ '{'}it.id{'}' }, {{faltou: this.checked}})">
-                      <label class="form-check-label">Faltou</label>
-                    </div>
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" ${'{'}it.forcar_conferido ? 'checked' : ''{'}'}
-                             onchange="toggleItem(${ '{'}it.id{'}' }, {{forcar_conferido: this.checked}})">
-                      <label class="form-check-label">Forçar conferido</label>
-                    </div>
-                    <div class="input-group input-group-sm">
-                      <span class="input-group-text">Sobrando</span>
-                      <input type="number" class="form-control" value="${'{'}it.sobrando || 0{'}'}"
-                             onchange="toggleItem(${ '{'}it.id{'}' }, {{sobrando: parseInt(this.value||0)}})">
-                    </div>
-                    <div class="input-group input-group-sm">
-                      <span class="input-group-text">Obs</span>
-                      <input type="text" class="form-control" value="${'{'}it.observacao || ''{'}'}"
-                             onchange="toggleItem(${ '{'}it.id{'}' }, {{observacao: this.value}})">
-                    </div>
-                  </div>
-                </div>
-              </div>`;
-          }}
 
-          html += `</div></div>`;
+            // Linha no formato: EAN DESCRIÇÃO COD FAB QTD UN (C/ PACK)
+            const ean = (it.cod_barras || '').trim();
+            const desc = (it.descricao || '').toUpperCase().trim();
+            const cod  = (it.codigo || '').trim();
+            const fab  = (it.fabricante || '').toUpperCase().trim();
+            const qtd  = (it.qtd_unidades || 0);
+            const un   = (it.unidade || '').toUpperCase().trim();
+            const packSuffix = it.pack_qtd ? (' (C/ ' + it.pack_qtd + ' ' + (it.pack_unid || '') + ')') : '';
+            const linha = [ean, desc, cod, fab, (qtd + ' ' + un + packSuffix)]
+                           .filter(Boolean).join(' ').replace(/\\s+/g,' ');
+
+            htmlStr += ''
+              + '<div class="list-group-item ' + pintaLinha(it) + '">'
+                + '<div class="d-flex flex-column flex-md-row justify-content-between gap-2">'
+                  + '<div class="flex-grow-1">'
+                    + '<div class="small-mono">' + linha + '</div>'
+                    + '<div class="mt-1">'
+                      + (it.forcar_conferido ? badge('FORÇADO','bg-warning text-dark') : '')
+                      + (it.faltou ? badge('FALTOU','bg-danger') : '')
+                      + (it.separado ? badge('SEPARADO','bg-success') : '')
+                    + '</div>'
+                  + '</div>'
+                  + '<div class="d-flex flex-column align-items-start align-items-md-end gap-2">'
+                    + '<div class="form-check">'
+                      + '<input class="form-check-input" type="checkbox" ' + (it.separado ? 'checked' : '') + ' '
+                        + 'onchange="toggleItem(' + it.id + ', {{separado: this.checked}})">'
+                      + '<label class="form-check-label">Separado</label>'
+                    + '</div>'
+                    + '<div class="form-check">'
+                      + '<input class="form-check-input" type="checkbox" ' + (it.faltou ? 'checked' : '') + ' '
+                        + 'onchange="toggleItem(' + it.id + ', {{faltou: this.checked}})">'
+                      + '<label class="form-check-label">Faltou</label>'
+                    + '</div>'
+                    + '<div class="form-check">'
+                      + '<input class="form-check-input" type="checkbox" ' + (it.forcar_conferido ? 'checked' : '') + ' '
+                        + 'onchange="toggleItem(' + it.id + ', {{forcar_conferido: this.checked}})">'
+                      + '<label class="form-check-label">Forçar conferido</label>'
+                    + '</div>'
+                    + '<div class="input-group input-group-sm">'
+                      + '<span class="input-group-text">Sobrando</span>'
+                      + '<input type="number" class="form-control" value="' + (it.sobrando || 0) + '" '
+                        + 'onchange="toggleItem(' + it.id + ', {{sobrando: parseInt(this.value||0)}})">'
+                    + '</div>'
+                    + '<div class="input-group input-group-sm">'
+                      + '<span class="input-group-text">Obs</span>'
+                      + '<input type="text" class="form-control" value="' + (it.observacao || '') + '" '
+                        + 'onchange="toggleItem(' + it.id + ', {{observacao: this.value}})">'
+                    + '</div>'
+                  + '</div>'
+                + '</div>'
+              + '</div>';
+          }}
+          htmlStr += '</div></div>'; // fecha card do grupo
         }}
-        wrap.innerHTML = html || '<div class="alert alert-secondary">Nenhum item para exibir.</div>';
+
+        wrap.innerHTML = htmlStr || '<div class="alert alert-secondary">Nenhum item para exibir.</div>';
         document.getElementById('resumo').textContent = total ? (marcados + '/' + total + ' itens marcados') : '';
       }}
 
@@ -975,11 +1026,9 @@ def mapa_detalhe(numero_carga):
       }}
 
       async function toggleItem(id, patch) {{
-        // Atualiza o objeto local
         const idx = STATE.itens.findIndex(x => x.id === id);
         if (idx >= 0) Object.assign(STATE.itens[idx], patch);
         render();
-        // Persiste no servidor
         const body = Object.assign({{ item_id: id }}, patch);
         await fetch('/api/mapa/item/atualizar', {{
           method: 'POST',
@@ -989,7 +1038,6 @@ def mapa_detalhe(numero_carga):
       }}
 
       async function marcarGrupo(grupo, flag) {{
-        // Otimista: marca no cliente
         for (const it of STATE.itens) if (it.grupo_codigo === grupo) it.separado = !!flag;
         render();
         await fetch('/api/mapa/grupo/marcar', {{
@@ -1005,4 +1053,5 @@ def mapa_detalhe(numero_carga):
     </body></html>
     """
     return html
+
 
