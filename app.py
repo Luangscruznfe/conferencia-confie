@@ -895,7 +895,7 @@ def mapa_detalhe(numero_carga):
         .badge.bg-warning.text-dark {{ color:#1b1f29 !important; }}
         .small-mono {{
           font-family: ui-monospace, Menlo, Consolas, monospace;
-          font-size: .98rem; color:#f3f6ff;
+          font-size:.98rem; color:#f3f6ff;
         }}
         .sticky-top-bar {{ position:sticky; top:0; z-index:1020; background:var(--bg); padding:.75rem 0; }}
         .hover-row:hover {{ background:#1b2130; }}
@@ -963,15 +963,16 @@ def mapa_detalhe(numero_carga):
           for (const it of items) {{
             total++; if (it.separado) marcados++;
 
-            // Linha: DESCRIÇÃO COD FAB QTD UN (C/ PACK)  — (sem EAN à esquerda)
-            const desc = (it.descricao || '').toUpperCase().replace(/\\s+/g,' ').trim();
+            // === LINHA NO FORMATO: EAN CÓD DESCRIÇÃO FAB QTD UN (C/ PACK) ===
+            const ean = (it.cod_barras || '').trim();
             const cod  = (it.codigo || '').trim();
+            const desc = (it.descricao || '').toUpperCase().replace(/\\s+/g,' ').trim();
             const fab  = (it.fabricante || '').toUpperCase().trim();
             const qtd  = (it.qtd_unidades || 0);
             const un   = (it.unidade || '').toUpperCase().trim();
             const packSuffix = it.pack_qtd ? (' (C/ ' + it.pack_qtd + ' ' + (it.pack_unid || '') + ')') : '';
-            const linha = [desc, cod, fab, (qtd ? (qtd + ' ' + un + packSuffix) : '')]
-                           .filter(Boolean).join(' ').replace(/\\s+/g,' ');
+            const qtdParte = qtd ? (qtd + ' ' + un + packSuffix) : '';
+            const linha = [ean, cod, desc, fab, qtdParte].filter(Boolean).join(' ').replace(/\\s+/g,' ');
 
             htmlStr += ''
               + '<div class="' + pintaLinha(it) + '">'
@@ -1028,24 +1029,29 @@ def mapa_detalhe(numero_carga):
         STATE.itens  = data.itens  || [];
         render();
       }}
+
       async function toggleItem(id, patch) {{
         const idx = STATE.itens.findIndex(x => x.id === id);
         if (idx >= 0) Object.assign(STATE.itens[idx], patch);
         render();
         const body = Object.assign({{ item_id: id }}, patch);
         await fetch('/api/mapa/item/atualizar', {{
-          method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify(body)
         }});
       }}
+
       async function marcarGrupo(grupo, flag) {{
         for (const it of STATE.itens) if (it.grupo_codigo === grupo) it.separado = !!flag;
         render();
         await fetch('/api/mapa/grupo/marcar', {{
-          method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{ numero_carga: NUMERO_CARGA, grupo_codigo: grupo, separado: !!flag }})
         }});
       }}
+
       document.getElementById('busca').addEventListener('input', render);
       carregar();
       </script>

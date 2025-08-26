@@ -164,15 +164,23 @@ def _match_item(line: str):
 def parse_groups_and_items(all_text: str):
     grupos, itens, current_group = [], [], None
     lines = [" ".join(l.strip().split()) for l in all_text.splitlines() if l.strip()]
+
+    # buffers quando o PDF traz "1 CX" / "C/ 32 UN" em linhas soltas antes do item
+    pending_qty = None   # (qtd, un)
+    pending_pack = None  # (pack_qtd, pack_unid)
+
     i = 0
     while i < len(lines):
         line = lines[i]
 
-        # Cabeçalho de grupo
+        # Grupo
         mg = RE_GRUPO.match(line)
         if mg:
             current_group = {"codigo": mg.group(1).upper(), "titulo": mg.group(2).strip()}
             grupos.append(current_group)
+            # ao trocar de grupo, limpa pendentes
+            pending_qty = None
+            pending_pack = None
             i += 1
             continue
 
@@ -180,62 +188,66 @@ def parse_groups_and_items(all_text: str):
             i += 1
             continue
 
-        # 1) Tenta parsear a linha atual
+        # Se a linha é só QTD/UN ou só PACK, guarda no buffer e segue
+        only_q = _is_only_qty(line)
+        if only_q:
+            pending_qty = only_q
+            i += 1
+            continue
+        only_p = _is_only_pack(line)
+        if only_p:
+            pending_pack = only_p
+            i += 1
+            continue
+
+        # 1) tenta parsear a linha atual
         parsed = try_parse_line(line)
 
-        # 2) Se não deu, tenta juntar com a PRÓXIMA (quebra de descrição)
+        # 2) quebra de descrição? tenta juntar com a próxima
         if not parsed and i + 1 < len(lines):
             join_next = f"{line} {lines[i+1]}"
             parsed = try_parse_line(join_next)
             if parsed:
                 i += 1  # consumiu a próxima linha
 
-        # 3) Se parseou mas ficou sem QTD/UN e/ou PACK, tenta olhar PRÓXIMA linha
-        if parsed and i + 1 < len(lines):
-            nxt = lines[i+1]
-            got = False
-
-            # 3a) só quantidade/unidade na próxima?
-            qty = _is_only_qty(nxt)
-            if qty and not parsed.get("qtd_unidades"):
-                parsed["qtd_unidades"], parsed["unidade"] = qty
-                i += 1   # consome a próxima
-                got = True
-
-            # 3b) depois da qtd pode vir um PACK ainda
-            if got and i + 1 < len(lines):
-                nxt2 = lines[i+1]
-                pk = _is_only_pack(nxt2)
-                if pk and not parsed.get("pack_qtd"):
-                    parsed["pack_qtd"], parsed["pack_unid"] = pk
-                    i += 1  # consome mais uma
-
-            # 3c) ou pode ser só o PACK na próxima (sem qtd)
-            if not got:
-                pk = _is_only_pack(nxt)
-                if pk and not parsed.get("pack_qtd"):
-                    parsed["pack_qtd"], parsed["pack_unid"] = pk
-                    i += 1  # consome a próxima
-
-        # 4) Caso típico inverso: a PRÓXIMA linha é "1 UN" e a ATUAL é só descrição
-        if not parsed and i + 1 < len(lines):
-            qty = _is_only_qty(lines[i+1])
-            if qty and i - 1 >= 0:
-                # tenta colar a próxima (1 UN) na ATUAL
-                parsed = try_parse_line(f"{line} {lines[i+1]}")
-                if parsed:
-                    parsed["qtd_unidades"], parsed["unidade"] = qty
-                    i += 1  # consome a próxima
-
         if parsed:
+            # 3) aplica buffers pendentes (caso pack/qtd tenham aparecido ANTES do item)
+            if not parsed.get("qtd_unidades") and pending_qty:
+                parsed["qtd_unidades"], parsed["unidade"] = pending_qty
+                pending_qty = None
+            if not parsed.get("pack_qtd") and pending_pack:
+                parsed["pack_qtd"], parsed["pack_unid"] = pending_pack
+                pending_pack = None
+
+            # 4) olha LINHAS SEGUINTES imediatas para completar qtd e pack
+            if i + 1 < len(lines):
+                nxt = lines[i+1]
+                got = False
+                qn = _is_only_qty(nxt)
+                if qn and not parsed.get("qtd_unidades"):
+                    parsed["qtd_unidades"], parsed["unidade"] = qn
+                    i += 1
+                    got = True
+                if got and i + 1 < len(lines):
+                    nx2 = lines[i+1]
+                    pk2 = _is_only_pack(nx2)
+                    if pk2 and not parsed.get("pack_qtd"):
+                        parsed["pack_qtd"], parsed["pack_unid"] = pk2
+                        i += 1
+                if not got:
+                    pk = _is_only_pack(nxt)
+                    if pk and not parsed.get("pack_qtd"):
+                        parsed["pack_qtd"], parsed["pack_unid"] = pk
+                        i += 1
+
             parsed["grupo_codigo"] = current_group["codigo"]
-            # Sanidade: precisa ter pelo menos descrição e (código ou fabricante ou EAN)
             if parsed["descricao"] and (parsed["codigo"] or parsed["fabricante"] or parsed["cod_barras"]):
                 itens.append(parsed)
 
         i += 1
 
     return grupos, itens
+
 
 
 
