@@ -299,9 +299,10 @@ def healthz():
 
 @app.route("/")
 def pagina_inicial():
-    return render_template('conferencia.html')
+    return render_template('home_apps.html')
 
-@app.route("/conferencia")
+@app.route("/conferencia",  strict_slashes=False)
+@app.route("/conferencia/", strict_slashes=False)
 def pagina_conferencia():
     return render_template('conferencia.html')
 

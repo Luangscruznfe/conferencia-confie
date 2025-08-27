@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Confie • Apps</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background:#121212; color:#e4e6eb; }
+    .card { background:#1e1e1e; border:1px solid #333; border-radius:18px; }
+    .btn-lg { border-radius:14px; padding:14px 22px; }
+  </style>
+</head>
+<body>
+  <div class="container py-5">
+    <h1 class="mb-4 text-center">Confie • Escolha o aplicativo</h1>
+    <div class="row g-4 justify-content-center">
+      <div class="col-12 col-md-5">
+        <div class="card p-4 h-100 d-flex flex-column justify-content-between">
+          <div>
+            <h3>Conferência de Mercadorias</h3>
+            <p class="text-secondary mb-4">Upload/gestão de mapas, conferência e cortes.</p>
+          </div>
+          <a class="btn btn-primary btn-lg w-100" href="/conferencia/">Abrir Conferência</a>
+        </div>
+      </div>
+      <div class="col-12 col-md-5">
+        <div class="card p-4 h-100 d-flex flex-column justify-content-between">
+          <div>
+            <h3>Sistema de Pontuação</h3>
+            <p class="text-secondary mb-4">Registros por setor, histórico e relatórios.</p>
+          </div>
+          <!-- se a pontuação estiver em outro serviço, troque o href pela URL pública -->
+          <a class="btn btn-outline-light btn-lg w-100" href="/pontuacao/">Abrir Pontuação</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
