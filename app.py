@@ -9,6 +9,7 @@ from werkzeug.utils import secure_filename
 from collections import defaultdict
 from datetime import datetime
 from zipfile import ZipFile
+from flask import render_template, redirect
 import io
 import pandas as pd
 import fitz
@@ -299,12 +300,15 @@ def healthz():
 
 @app.route("/")
 def pagina_inicial():
-    return render_template('home_apps.html')
+    return render_template("home_apps.html")
 
-@app.route("/conferencia",  strict_slashes=False)
-@app.route("/conferencia/", strict_slashes=False)
+@app.get("/conferencia")
+def conferencia_redirect():
+    return redirect("/conferencia/", code=301)
+
+@app.get("/conferencia/")
 def pagina_conferencia():
-    return render_template('conferencia.html')
+    return render_template("conferencia.html")
 
 @app.route("/gestao")
 def pagina_gestao():
