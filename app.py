@@ -2,7 +2,7 @@
 # 1. IMPORTAÇÕES
 # =================================================================
 from flask import Flask, jsonify, render_template, abort, request, Response
-from parser_mapa import parse_mapa
+from conferencia_app.parser_mapa import parse_mapa
 import cloudinary, cloudinary.uploader, cloudinary.api
 import psycopg2, psycopg2.extras
 import json, os, re, io, fitz, shutil, requests
@@ -287,6 +287,11 @@ def salvar_no_banco_de_dados(dados_do_pedido):
 # 4. ROTAS DO SITE (ENDEREÇOS)
 # =================================================================
 init_db()
+
+@app.get("/healthz")
+def healthz():
+    return "ok", 200
+
 
 @app.route("/")
 def pagina_inicial():
