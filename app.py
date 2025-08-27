@@ -297,6 +297,9 @@ init_db()
 def healthz():
     return "ok", 200
 
+@app.get("/routes")
+def routes():
+    return str(app.url_map)
 
 @app.route("/")
 def pagina_inicial():
