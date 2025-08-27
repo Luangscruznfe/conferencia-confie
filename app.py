@@ -21,11 +21,6 @@ try:
 except ImportError:
     from .parser_mapa import parse_mapa, debug_extrator
 
-@app.before_request
-def _force_root_home():
-    if request.path == '/':
-        return render_template('home_apps.html')
-
 
 
 # =================================================================
@@ -298,6 +293,11 @@ def salvar_no_banco_de_dados(dados_do_pedido):
 # 4. ROTAS DO SITE (ENDEREÇOS)
 # =================================================================
 init_db()
+
+@app.before_request
+def _force_root_home():
+    if request.path == '/':
+        return render_template('home_apps.html')
 
 @app.get("/healthz")
 def healthz():
