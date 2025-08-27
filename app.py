@@ -2,7 +2,6 @@
 # 1. IMPORTAÇÕES
 # =================================================================
 from flask import Flask, jsonify, render_template, abort, request, Response
-from conferencia_app.parser_mapa import parse_mapa
 import cloudinary, cloudinary.uploader, cloudinary.api
 import psycopg2, psycopg2.extras
 import json, os, re, io, fitz, shutil, requests
@@ -16,6 +15,11 @@ import fitz
 import re
 import sys
 import logging
+try:
+    from conferencia_app.parser_mapa import parse_mapa, debug_extrator
+except ImportError:
+    from .parser_mapa import parse_mapa, debug_extrator
+
 
 # =================================================================
 # 2. CONFIGURAÇÃO DA APP FLASK
@@ -1103,7 +1107,6 @@ def mapa_extrator():
 
     try:
         # usa as funções de debug do parser
-        from parser_mapa import debug_extrator
         rows = debug_extrator(path_tmp)
     except Exception as e:
         return (f"Erro no extrator: {e}", 400)
