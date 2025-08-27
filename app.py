@@ -21,6 +21,12 @@ try:
 except ImportError:
     from .parser_mapa import parse_mapa, debug_extrator
 
+@app.before_request
+def _force_root_home():
+    if request.path == '/':
+        return render_template('home_apps.html')
+
+
 
 # =================================================================
 # 2. CONFIGURAÇÃO DA APP FLASK
